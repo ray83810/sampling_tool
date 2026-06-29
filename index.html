@@ -1,0 +1,1227 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QA 評比案件抽樣工具 (Molly 3+1+1 & 其他人 4+1 模式)</title>
+    <!-- CSV Parser -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <!-- Excel Parser (SheetJS) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- HTML2Canvas -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Noto Sans TC', sans-serif; }
+        .drag-active { border-color: #3b82f6; background-color: #eff6ff; }
+        /* RATE column specific styling for table display */
+        .rate-cell {
+            white-space: pre-wrap;
+            min-width: 300px;
+            max-width: 500px;
+            font-size: 0.75rem;
+            line-height: 1.25;
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #e5e7eb;
+            padding: 4px;
+            border-radius: 4px;
+            background-color: #f9fafb;
+        }
+        /* Highlight for linked rows */
+        .linked-row {
+            background-color: #fffbeb; /* Light yellow base for linked rows */
+        }
+        .linked-row td:first-child {
+            padding-left: 1.5rem;
+            border-left: 4px solid #f59e0b;
+        }
+        /* Sortable Header */
+        .sortable-header {
+            cursor: pointer;
+            transition: background-color 0.2s;
+            user-select: none;
+        }
+        .sortable-header:hover {
+            background-color: #e5e7eb;
+        }
+        /* Selected Row Highlight */
+        .selected-row {
+            background-color: #fef08a !important; /* Tailwind yellow-200 */
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen p-4 md:p-8">
+
+    <div id="main-container" class="w-full mx-auto bg-white rounded-xl shadow-lg overflow-hidden relative">
+        <!-- Header -->
+        <div class="bg-white p-6 text-gray-900 border-b border-gray-200">
+            <h1 class="text-2xl font-bold"><i class="fas fa-tasks mr-2 text-blue-600"></i> QA 評比案件自動抽樣系統</h1>
+            
+            <p class="mt-2 text-lg font-bold text-[#6A6AFF]">請上傳「主報表 (Data)」與「維修中心報表 (call-records)」以進行抽樣。</p>
+            
+            <div class="mt-2 text-gray-600 text-sm flex items-center flex-wrap">
+                <span>Inbound 抽樣 + 自動帶出後續 Outbound 關聯案件 (直到服務結束)。</span>
+                
+                <button onclick="toggleRulesModal()" class="ml-3 px-2 py-1 bg-blue-600 hover:bg-blue-700 rounded text-white font-bold text-xs transition-colors cursor-pointer flex items-center shadow-sm">
+                    <i class="fas fa-info-circle mr-1"></i> 查看詳細規則
+                </button>
+            </div>
+        </div>
+
+        <!-- Control Panel -->
+        <div class="p-6 border-b border-gray-200">
+            <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center transition-colors cursor-pointer hover:bg-gray-50">
+                <input type="file" id="fileInput" accept=".csv, .xlsx, .xls" class="hidden" multiple>
+                <div class="space-y-4 pointer-events-none">
+                    <i class="fas fa-cloud-upload-alt text-4xl text-gray-400"></i>
+                    <p class="text-gray-600 font-medium">點擊或拖曳檔案至此 (支援同時拖放多個檔案)</p>
+                    
+                    <!-- File Status Badges -->
+                    <div class="flex justify-center gap-6 mt-4">
+                        <div id="status-main" class="flex items-center text-xs px-3 py-1.5 rounded-full border bg-gray-100 text-gray-500 border-gray-300 transition-all duration-300">
+                            <i class="fas fa-circle mr-2 text-gray-400" id="icon-main"></i>
+                            <span id="text-main">主報表 (Data) - 未上傳</span>
+                        </div>
+                        <div id="status-rma" class="flex items-center text-xs px-3 py-1.5 rounded-full border bg-gray-100 text-gray-500 border-gray-300 transition-all duration-300">
+                            <i class="fas fa-circle mr-2 text-gray-400" id="icon-rma"></i>
+                            <span id="text-rma">維修中心報表 (call-records) - 未上傳</span>
+                        </div>
+                    </div>
+                    
+                    <p class="text-xs text-gray-400">支援格式: .csv, .xlsx, .xls</p>
+                </div>
+            </div>
+
+            <!-- Warning Status Area -->
+            <div id="warning-area" class="mt-4 hidden">
+                <div class="bg-yellow-50 text-yellow-700 p-4 rounded-lg border border-yellow-200">
+                    <span id="warning-text"></span>
+                </div>
+            </div>
+
+            <!-- Success Status Area -->
+            <div id="status-area" class="mt-4 hidden">
+                <div class="flex items-center justify-between bg-green-50 text-green-700 p-4 rounded-lg border border-green-200">
+                    <span id="status-text"><i class="fas fa-check-circle mr-2"></i> 抽樣完成！共抽出 <span id="count-display" class="font-bold">0</span> 筆主案件 (含關聯回電)。</span>
+                    <div class="space-x-2">
+                        <button id="downloadBtn" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded shadow transition text-sm">
+                            <i class="fas fa-file-csv mr-2"></i>下載 CSV
+                        </button>
+                        <button id="downloadImageBtn" onclick="downloadImage()" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded shadow transition text-sm">
+                            <i class="fas fa-image mr-2"></i>下載圖片
+                        </button>
+                        <button id="clearBtn" onclick="clearData()" class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded shadow transition text-sm">
+                            <i class="fas fa-trash-alt mr-2"></i>清除資料
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="error-area" class="mt-4 hidden">
+                <div class="bg-red-50 text-red-700 p-4 rounded-lg border border-red-200">
+                    <span id="error-text"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filter Bar -->
+        <div id="filter-bar" class="hidden px-6 py-4 bg-gray-50 border-b border-gray-200 flex flex-wrap gap-4 items-end">
+            <div>
+                <label class="block text-xs font-bold text-gray-500 mb-1">人員篩選 (Agent)</label>
+                <select id="filterAgent" onchange="applyFilters()" class="bg-white border border-gray-300 text-gray-700 text-sm rounded focus:ring-blue-500 focus:border-blue-500 block w-40 p-2">
+                    <option value="all">全部 (All)</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-bold text-gray-500 mb-1">類別篩選 (Category)</label>
+                <select id="filterCategory" onchange="applyFilters()" class="bg-white border border-gray-300 text-gray-700 text-sm rounded focus:ring-blue-500 focus:border-blue-500 block w-64 p-2">
+                    <option value="all">全部 (All)</option>
+                </select>
+            </div>
+            <div class="ml-auto flex items-center text-xs text-gray-400">
+                <i class="fas fa-info-circle mr-1"></i> 點擊表頭標題可進行排序 (關聯案件將跟隨主案件)
+            </div>
+        </div>
+
+        <!-- Results Table -->
+        <div class="p-6 overflow-x-auto">
+            <table class="w-full text-sm text-left text-gray-500 hidden" id="resultTable">
+                <thead class="text-xs text-gray-700 uppercase bg-gray-100">
+                    <tr>
+                        <th class="px-4 py-3 sortable-header w-1 whitespace-nowrap" onclick="handleSort('_normalizedAgent')">
+                            人員 <i class="fas fa-sort text-gray-400 ml-1" id="sort-icon-_normalizedAgent"></i>
+                        </th>
+                        <th class="px-4 py-3 sortable-header w-1 whitespace-nowrap" onclick="handleSort('Sampling_Category')">
+                            抽樣類別 <i class="fas fa-sort text-gray-400 ml-1" id="sort-icon-Sampling_Category"></i>
+                        </th>
+                        <th class="px-4 py-3 sortable-header w-1 whitespace-nowrap" onclick="handleSort('_direction')">
+                            方向 <i class="fas fa-sort text-gray-400 ml-1" id="sort-icon-_direction"></i>
+                        </th>
+                        <th class="px-4 py-3 sortable-header w-1 whitespace-nowrap" onclick="handleSort('_startTimeObj')">
+                            開始時間 <i class="fas fa-sort text-gray-400 ml-1" id="sort-icon-_startTimeObj"></i>
+                        </th>
+                        <th class="px-4 py-3 sortable-header w-1 whitespace-nowrap" onclick="handleSort('_mdn')">
+                            電話 (MDN) <i class="fas fa-sort text-gray-400 ml-1" id="sort-icon-_mdn"></i>
+                        </th>
+                        <th class="px-4 py-3 sortable-header w-1 whitespace-nowrap" onclick="handleSort('Carrier')">
+                            電信業者 <i class="fas fa-sort text-gray-400 ml-1" id="sort-icon-Carrier"></i>
+                        </th>
+                        <th class="px-4 py-3 sortable-header" onclick="handleSort('session_reason')">
+                            案件原因 <i class="fas fa-sort text-gray-400 ml-1" id="sort-icon-session_reason"></i>
+                        </th>
+                        <th class="px-4 py-3 sortable-header" onclick="handleSort('session_sub_reason')">
+                            次要原因 <i class="fas fa-sort text-gray-400 ml-1" id="sort-icon-session_sub_reason"></i>
+                        </th>
+                        <th class="px-4 py-3">RATE (整合資訊)</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody">
+                    <!-- Rows will be injected here -->
+                </tbody>
+            </table>
+            
+            <div id="empty-state" class="text-center py-12 text-gray-400">
+                <i class="fas fa-inbox text-4xl mb-3"></i>
+                <p>請上傳主報表與維修中心報表以檢視結果</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="text-center text-gray-400 text-xs mt-8 pb-8">
+        Designed for QA Sampling Process | Logic: Inbound Only, Exclude "未提供服務", "滿意度調查未完成" & "原因與次要原因空白"
+    </div>
+
+    <!-- Rules Modal -->
+    <div id="rulesModal" class="fixed inset-0 bg-gray-900 bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full flex flex-col max-h-[90vh]">
+            <div class="p-6 border-b flex justify-between items-center bg-gray-50 rounded-t-xl">
+                <h3 class="text-xl font-bold text-gray-800"><i class="fas fa-book-open text-blue-600 mr-2"></i> 詳細抽樣規則說明</h3>
+                <button onclick="toggleRulesModal()" class="text-gray-400 hover:text-gray-600 w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-200 transition">
+                    <i class="fas fa-times text-lg"></i>
+                </button>
+            </div>
+            <div class="p-6 overflow-y-auto text-sm text-gray-700 space-y-6">
+                
+                <!-- Section 1: Global Filters -->
+                <div class="bg-blue-50 p-4 rounded-lg border border-blue-100">
+                    <h4 class="font-bold text-blue-800 mb-2"><i class="fas fa-filter mr-1"></i> 全域抽樣與串聯機制</h4>
+                    <ul class="list-disc list-inside space-y-1 text-blue-900">
+                        <li><strong>主案件方向</strong>: 僅抽取 <span class="bg-blue-200 px-1 rounded">Inbound (進線)</span> 為主案件。</li>
+                        <li><strong>排除條件</strong>: 「未提供服務」、「滿意度調查未完成」及「案件原因與次要原因皆空白」的案件不列入主案件抽樣池。</li>
+                        <li><strong>Chat 判斷</strong>: 若 Contact Type 為 Chat，方向將獨立標示為 <span class="bg-purple-200 px-1 rounded">Chat</span>。</li>
+                        <li><strong>自動關聯回電</strong>: 抽出主案件後，將自動往下搜尋同 MDN 的 <span class="bg-yellow-200 px-1 rounded">Outbound (外撥)</span>，直至出現新的 Inbound 為止。</li>
+                        <li><strong>解決中斷 (Resolved)</strong>: 若任一關聯通話之話後 (Wrap Up) 包含 "RESOLVED" (不分大小寫)，則視為服務結束，停止後續串聯。</li>
+                        <li><strong>跨號碼串聯 (Callback)</strong>: 若話後包含 "CALLBACK"，且在 Symptoms 中偵測到不同於當前的電話號碼 (09xxxxxxxx 或 0xxxxxxxxx)，系統將主動追蹤該新號碼的 Outbound 案件進行串聯。</li>
+                    </ul>
+                </div>
+                
+                <!-- Section 2: Molly Rule -->
+                <div>
+                    <h4 class="font-bold text-gray-900 mb-2 text-base border-b pb-1">👩💼 Molly Song 專屬規則 (共 5 筆)</h4>
+                    <ul class="list-decimal list-inside space-y-2 ml-2">
+                        <li><strong>3 筆 泰強守服務 (TCS)</strong>。</li>
+                        <li><strong>1 筆 RMA維修中心專線</strong> (若無有效案件，則以「泰強守服務」遞補)。</li>
+                        <li><strong>1 筆 EWS/Trade in服務</strong> (若無有效案件，則<strong>不遞補，該名額從缺</strong>)。</li>
+                    </ul>
+                </div>
+
+                <!-- Section 3: Others Rule -->
+                <div>
+                    <h4 class="font-bold text-gray-900 mb-2 text-base border-b pb-1">👥 其他人員抽樣規則 (共 5 筆)</h4>
+                    <ul class="list-decimal list-inside space-y-2 ml-2">
+                        <li><strong>1 筆 技術服務 CALL</strong> (Soluto 專案)。</li>
+                        <li><strong>1 筆 泰強守</strong> (TCS)。</li>
+                        <li><strong>1 筆 RMA維修中心</strong>。</li>
+                        <li><strong>1 筆 EWS/Trade in服務</strong> (若無有效案件，優先以「泰強守」替補；若無泰強守，再以「RMA維修中心」替補)。</li>
+                        <li><strong>1 筆 General 其他服務</strong> (若無有效案件，則<strong>不遞補，該名額從缺</strong>)。</li>
+                    </ul>
+                </div>
+
+            </div>
+            <div class="p-6 border-t bg-gray-50 rounded-b-xl text-right">
+                <button onclick="toggleRulesModal()" class="px-4 py-2 bg-gray-800 hover:bg-gray-900 text-white rounded shadow transition">
+                    關閉
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Configuration ---
+        const AGENT_MAP = {
+            'jacky.lee': 'Jacky Lee',
+            'amber.wang': 'Amber Wang',
+            'rex.liao': 'Rex Liao',
+            'JianKai.Ding': 'Jian Kai Ding',
+            'Howard.Chen': 'Howard Chen',
+            'alex.chen': 'Alex Chen',
+            'evan.liu': 'Evan Liu',
+            'sherry.lin': 'Sherry Lin',
+            'molly.song': 'Molly Song'
+        };
+        const TARGET_AGENTS = Object.values(AGENT_MAP);
+
+        // --- DOM Elements ---
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('fileInput');
+        const statusArea = document.getElementById('status-area');
+        const errorArea = document.getElementById('error-area');
+        const warningArea = document.getElementById('warning-area');
+        const resultTable = document.getElementById('resultTable');
+        const tableBody = document.getElementById('tableBody');
+        const emptyState = document.getElementById('empty-state');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const countDisplay = document.getElementById('count-display');
+        const filterBar = document.getElementById('filter-bar');
+        const filterAgent = document.getElementById('filterAgent');
+        const filterCategory = document.getElementById('filterCategory');
+
+        // --- State ---
+        let mainData = null;
+        let rmaData = null;
+        let mainFileName = "";
+        let rmaFileName = "";
+        
+        let sampleGroups = []; 
+        let currentFilteredGroups = []; 
+        let sortState = {
+            key: null,
+            asc: true
+        };
+
+        // --- Event Listeners ---
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-active'); });
+        dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('drag-active'); });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-active');
+            if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) handleFiles(e.target.files);
+        });
+        downloadBtn.addEventListener('click', downloadCSV);
+
+        // --- Logic: Mapping Values ---
+        function mapNPS(val) {
+            if (!val) return '-';
+            const s = String(val).trim();
+            if (s.includes('非常願意')) return '5';
+            if (s.includes('不願意')) { 
+                if (s.includes('非常')) return '1';
+                return '2';
+            }
+            if (s.includes('願意')) return '4';
+            if (s.includes('普通')) return '3';
+            return s; 
+        }
+
+        function mapResolution(val) {
+            if (!val) return '-';
+            const s = String(val).trim().toUpperCase(); 
+            
+            if (s === 'YES') return '1';
+            if (s === 'NO') return '2';
+            if (s.includes('已解決')) return '1';
+            if (s.includes('未解決')) return '2';
+            
+            return s;
+        }
+
+        function getDirectionLabel(row) {
+            if (row.isRma) {
+                return (row['聯繫方式'] || '').toUpperCase() === 'OUTBOUND' ? 'Out' : 'In';
+            }
+            if (row['Contact Type'] === 'Chat') return 'Chat';
+            return row._direction;
+        }
+
+        function getDirectionBadge(row) {
+            const dir = getDirectionLabel(row);
+            if (dir === 'Chat') {
+                return `<span class="bg-purple-100 text-purple-800 text-xs font-bold px-2 py-0.5 rounded">Chat</span>`;
+            } else if (dir.toLowerCase() === 'out') {
+                return `<span class="bg-yellow-100 text-yellow-800 text-xs font-bold px-2 py-0.5 rounded">Outbound</span>`;
+            } else {
+                return `<span class="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-0.5 rounded">Inbound</span>`;
+            }
+        }
+
+        // --- Logic: Rate Text for Main Report ---
+        function generateRateText(row) {
+            let dirStr = '';
+            const rawDir = getDirectionLabel(row);
+            if (rawDir === 'Chat') dirStr = '【Chat】';
+            else if (rawDir.toLowerCase() === 'out') dirStr = '【OB】';
+            else dirStr = '【IB】';
+
+            const nps = row._npsVal;
+            const csat = row._csatVal; 
+            const res = row._resolutionVal;
+
+            return `${dirStr}
+${row._symptoms}
+
+來電原因：${row._sessionReason}>${row._subReason}
+話後：${row._wrapUp}
+滿意度調查：${nps}-${csat}-${res}
+裝置型號：${row._device}
+裝置型號2：
+Device OS：
+用戶類型：
+門市/經銷商名稱：
+門市人員名稱：
+使用工具：`;
+        }
+
+        // --- Logic: Rate Text for RMA call-records ---
+        function generateRmaRateText(row) {
+            const dirStr = (row['聯繫方式'] || '').toUpperCase() === 'OUTBOUND' ? '【OB】' : '【IB】';
+            const rateText = row['RATE 紀錄'] || '';
+            const rmaId = row['維修單號'] ? `維修單號：${row['維修單號']}\n` : '';
+            const policyId = row['保單號碼'] ? `保單號碼：${row['保單號碼']}\n` : '';
+            const reasonStr = `主要來電原因：${row['主要來電原因'] || ''}>${row['次要來電原因'] || ''}\n`;
+            const wrapUpStr = `話後：${row['話後'] || ''}\n`;
+            
+            return `${dirStr}
+${rateText}
+
+${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
+        }
+
+        // --- Helpers ---
+        function parseDate(dateInput) {
+            if (!dateInput) return null;
+            if (dateInput instanceof Date) return isNaN(dateInput.getTime()) ? null : dateInput;
+            const d = new Date(dateInput);
+            return isNaN(d.getTime()) ? null : d;
+        }
+
+        function formatTime12Hour(dateObj) {
+            if (!dateObj || isNaN(dateObj.getTime())) return '-';
+            const year = dateObj.getFullYear();
+            const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+            const day = String(dateObj.getDate()).padStart(2, '0');
+            let hours = dateObj.getHours();
+            const minutes = String(dateObj.getMinutes()).padStart(2, '0');
+            const seconds = String(dateObj.getSeconds()).padStart(2, '0');
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            hours = hours % 12;
+            hours = hours ? hours : 12;
+            return `${year}/${month}/${day} ${hours}:${minutes}:${seconds} ${ampm}`;
+        }
+
+        function normalizeAgentName(name) {
+            if (!name) return "";
+            return String(name).trim().toLowerCase().replace(/[\s\.]/g, '');
+        }
+
+        function getMappedAgent(rawAgent) {
+            const norm = normalizeAgentName(rawAgent);
+            if (!norm) return null;
+            for (let key in AGENT_MAP) {
+                if (normalizeAgentName(key) === norm || normalizeAgentName(AGENT_MAP[key]) === norm) {
+                    return AGENT_MAP[key];
+                }
+            }
+            return null;
+        }
+
+        // --- Single Select Function ---
+        function toggleRowSelection(row) {
+            const isCurrentlySelected = row.classList.contains('selected-row');
+            const allRows = document.getElementById('tableBody').querySelectorAll('tr');
+            allRows.forEach(r => r.classList.remove('selected-row'));
+
+            if (!isCurrentlySelected) {
+                row.classList.add('selected-row');
+            }
+        }
+
+        // --- Copy Function ---
+        function copyRateContent(id, event) {
+            event.stopPropagation(); 
+            const el = document.getElementById(`rate-${id}`);
+            if (!el) return;
+            
+            const text = el.innerText;
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    const icon = document.getElementById(`icon-${id}`);
+                    if (icon) {
+                        icon.className = 'fas fa-check text-green-600'; 
+                        setTimeout(() => {
+                            icon.className = 'fas fa-copy'; 
+                        }, 2000);
+                    }
+                } else {
+                    alert('複製失敗：瀏覽器不支援');
+                }
+            } catch (err) {
+                console.error('Fallback copy failed', err);
+                alert('複製失敗');
+            }
+            document.body.removeChild(textarea);
+        }
+
+        function toggleRulesModal() {
+            document.getElementById('rulesModal').classList.toggle('hidden');
+        }
+
+        function clearData() {
+            mainData = null;
+            rmaData = null;
+            mainFileName = "";
+            rmaFileName = "";
+            sampleGroups = [];
+            currentFilteredGroups = [];
+            
+            updateStatusBadge('main', false);
+            updateStatusBadge('rma', false);
+            
+            statusArea.classList.add('hidden');
+            errorArea.classList.add('hidden');
+            warningArea.classList.add('hidden');
+            resultTable.classList.add('hidden');
+            filterBar.classList.add('hidden');
+            emptyState.classList.remove('hidden');
+            tableBody.innerHTML = '';
+            fileInput.value = "";
+        }
+
+        function updateStatusBadge(type, isLoaded, fileName = "") {
+            const badge = document.getElementById(`status-${type}`);
+            const icon = document.getElementById(`icon-${type}`);
+            const text = document.getElementById(`text-${type}`);
+            
+            if (isLoaded) {
+                badge.className = "flex items-center text-xs px-3 py-1.5 rounded-full border bg-green-50 text-green-700 border-green-300 transition-all duration-300 font-bold";
+                icon.className = "fas fa-check-circle text-green-500 mr-2";
+                text.textContent = type === 'main' ? `主報表: ${fileName}` : `維修中心報表: ${fileName}`;
+            } else {
+                badge.className = "flex items-center text-xs px-3 py-1.5 rounded-full border bg-gray-100 text-gray-500 border-gray-300 transition-all duration-300";
+                icon.className = "fas fa-circle text-gray-400 mr-2";
+                text.textContent = type === 'main' ? "主報表 (Data) - 未上傳" : "維修中心報表 (call-records) - 未上傳";
+            }
+        }
+
+        function showWarning(msg) {
+            warningArea.classList.remove('hidden');
+            document.getElementById('warning-text').textContent = msg;
+        }
+
+        function showError(msg) {
+            errorArea.classList.remove('hidden');
+            document.getElementById('error-text').textContent = msg;
+        }
+
+        // --- File Handlers ---
+        function handleFiles(files) {
+            errorArea.classList.add('hidden');
+            warningArea.classList.add('hidden');
+            
+            let filesParsed = 0;
+            const filesToParse = files.length;
+            
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const fileName = file.name.toLowerCase();
+                
+                if (fileName.endsWith('.csv')) {
+                    Papa.parse(file, {
+                        header: true,
+                        skipEmptyLines: true,
+                        complete: (results) => {
+                            try {
+                                const parsed = parseRawData(results.data);
+                                if (parsed) handleParsedResult(parsed, file.name);
+                            } catch (err) { showError("處理 CSV 失敗: " + err.message); }
+                            checkAllFilesParsed();
+                        },
+                        error: (err) => {
+                            showError("解析 CSV 失敗: " + err.message);
+                            checkAllFilesParsed();
+                        }
+                    });
+                } else if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        try {
+                            const data = new Uint8Array(e.target.result);
+                            const workbook = XLSX.read(data, { type: 'array', cellDates: true });
+                            const parsed = parseRawWorkbook(workbook);
+                            if (parsed) handleParsedResult(parsed, file.name);
+                        } catch (err) { showError("讀取 Excel 失敗: " + err.message); }
+                        checkAllFilesParsed();
+                    };
+                    reader.readAsArrayBuffer(file);
+                } else {
+                    showError(`不支援的檔案格式：${file.name}`);
+                    checkAllFilesParsed();
+                }
+            }
+            
+            function checkAllFilesParsed() {
+                filesParsed++;
+                if (filesParsed === filesToParse) {
+                    if (mainData && rmaData) {
+                        try {
+                            processData(mainData, rmaData);
+                        } catch (err) {
+                            showError("處理資料時發生錯誤: " + err.message);
+                        }
+                    } else if (mainData) {
+                        showWarning("主報表已載入，請上傳「維修中心報表 (call-records)」檔案以進行抽樣。");
+                    } else if (rmaData) {
+                        showWarning("維修中心報表已載入，請上傳「主報表 (Data)」檔案以進行抽樣。");
+                    }
+                }
+            }
+        }
+
+        function handleParsedResult(parsed, fileName) {
+            if (parsed.type === 'MAIN') {
+                mainData = parsed.data;
+                mainFileName = fileName;
+                updateStatusBadge('main', true, fileName);
+            } else if (parsed.type === 'RMA') {
+                rmaData = parsed.data;
+                rmaFileName = fileName;
+                updateStatusBadge('rma', true, fileName);
+            }
+        }
+
+        // --- Workbook Header Scanning & Parsing ---
+        function parseRawWorkbook(workbook) {
+            const sheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[sheetName];
+            const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+            return parseRawData(rows);
+        }
+
+        function parseRawData(rows) {
+            if (!rows || rows.length === 0) return null;
+            
+            let isObjectList = false;
+            let keys = [];
+            if (typeof rows[0] === 'object' && !Array.isArray(rows[0])) {
+                isObjectList = true;
+                keys = Object.keys(rows[0]);
+            }
+            
+            const mainKeywords = ['agent', 'engagement_type', 'engagement_id', 'mdn', 'start_time'];
+            const rmaKeywords = ['進線電話/外撥電話', '客服人員', 'rate 紀錄', '主要來電原因', '次要來電原因'];
+            
+            if (isObjectList) {
+                let mainMatches = keys.filter(k => mainKeywords.includes(k.toLowerCase())).length;
+                let rmaMatches = keys.filter(k => rmaKeywords.includes(k) || rmaKeywords.includes(k.toLowerCase())).length;
+                
+                let detectedType = null;
+                if (mainMatches > rmaMatches && mainMatches > 0) detectedType = 'MAIN';
+                else if (rmaMatches > mainMatches && rmaMatches > 0) detectedType = 'RMA';
+                else if (keys.includes('AGENT')) detectedType = 'MAIN';
+                else if (keys.includes('客服人員')) detectedType = 'RMA';
+                
+                if (!detectedType) return null;
+                return { type: detectedType, data: rows };
+            }
+            
+            let headerIdx = -1;
+            let maxMatch = 0;
+            let detectedType = null;
+            
+            const scanLimit = Math.min(25, rows.length);
+            for (let i = 0; i < scanLimit; i++) {
+                const row = rows[i];
+                if (!row || !Array.isArray(row)) continue;
+                
+                let mainMatches = 0;
+                let rmaMatches = 0;
+                
+                row.forEach(cell => {
+                    if (cell !== null && cell !== undefined) {
+                        const valStr = String(cell).trim().toLowerCase();
+                        if (mainKeywords.includes(valStr)) mainMatches++;
+                        if (rmaKeywords.includes(valStr) || rmaKeywords.includes(String(cell).trim())) rmaMatches++;
+                    }
+                });
+                
+                if (mainMatches > maxMatch && mainMatches > 0) {
+                    maxMatch = mainMatches;
+                    headerIdx = i;
+                    detectedType = 'MAIN';
+                }
+                if (rmaMatches > maxMatch && rmaMatches > 0) {
+                    maxMatch = rmaMatches;
+                    headerIdx = i;
+                    detectedType = 'RMA';
+                }
+            }
+            
+            if (headerIdx === -1) {
+                const row0 = rows[0] || [];
+                const row0Str = row0.map(String);
+                if (row0Str.some(c => c.includes('AGENT'))) {
+                    detectedType = 'MAIN';
+                    headerIdx = 0;
+                } else if (row0Str.some(c => c.includes('客服人員'))) {
+                    detectedType = 'RMA';
+                    headerIdx = 0;
+                } else {
+                    return null;
+                }
+            }
+            
+            const headers = rows[headerIdx].map(h => String(h || '').trim());
+            const dataObjects = [];
+            for (let i = headerIdx + 1; i < rows.length; i++) {
+                const row = rows[i];
+                if (!row || row.length === 0) continue;
+                
+                if (row.every(cell => cell === null || cell === undefined || String(cell).trim() === '')) {
+                    continue;
+                }
+                
+                const obj = {};
+                headers.forEach((h, colIdx) => {
+                    if (h) {
+                        obj[h] = row[colIdx] !== undefined ? row[colIdx] : "";
+                    }
+                });
+                dataObjects.push(obj);
+            }
+            
+            return {
+                type: detectedType,
+                data: dataObjects
+            };
+        }
+
+        // --- Processing Logic ---
+        function processData(mainRows, rmaRows) {
+            sampleGroups = [];
+            
+            const agentMainGroups = {};
+            TARGET_AGENTS.forEach(agent => agentMainGroups[agent] = []);
+            const mdnHistory = {};
+
+            mainRows.forEach(row => {
+                let rawAgent = row['AGENT'] || '';
+                if (typeof rawAgent === 'string') rawAgent = rawAgent.trim();
+                let normalizedAgent = getMappedAgent(rawAgent);
+
+                row._normalizedAgent = normalizedAgent || rawAgent;
+                row._engagementType = row['ENGAGEMENT_TYPE'] || '';
+                row._contactType = row['Contact Type'] || '';
+                row._direction = (row['Direction'] || '').trim();
+                row._reason = row['Reason'] || '';
+                row._sessionReason = row['session_reason'] || '';
+                row._subReason = row['session_sub_reason'] || '';
+                row._callerType = row['caller_type'] || '';
+                row._carrier = row['Carrier'] || ''; 
+                row._mdn = row['MDN'] || '';
+                row._startTimeVal = row['START_TIME'];
+                row._startTimeObj = parseDate(row._startTimeVal);
+                row._symptoms = row['symptoms'] || '';
+                row._wrapUp = row['WRAP_UP_CODE'] || '';
+                row._device = row['Device'] || '';
+                row._nps = row['NPS'] || '';
+                row._csat = row['CSAT'] || '';
+                row._resolution = row['Resolution'] || '';
+                row.isRma = false;
+                
+                row.ENGAGEMENT_ID = row['ENGAGEMENT_ID'] || Math.random().toString(36).substr(2, 9);
+                row._npsVal = mapNPS(row._nps);
+                row._csatVal = mapNPS(row._csat); 
+                row._resolutionVal = mapResolution(row._resolution);
+
+                if (row._mdn) {
+                    if (!mdnHistory[row._mdn]) mdnHistory[row._mdn] = [];
+                    mdnHistory[row._mdn].push(row);
+                }
+
+                if (normalizedAgent && TARGET_AGENTS.includes(normalizedAgent)) {
+                    if (row._direction.toLowerCase() !== 'in') return;
+                    if (row._sessionReason === '未提供服務') return;
+                    if (row._subReason === '滿意度調查未完成') return;
+                    if (row._sessionReason.trim() === '' && row._subReason.trim() === '') return;
+                    
+                    agentMainGroups[normalizedAgent].push(row);
+                }
+            });
+
+            const agentRmaGroups = {};
+            TARGET_AGENTS.forEach(agent => agentRmaGroups[agent] = []);
+            
+            rmaRows.forEach(row => {
+                if (row['類型'] !== 'RMA') return;
+                if (row['話後'] === '未接來電') return;
+                
+                let rawAgent = row['客服人員'] || '';
+                if (rawAgent === 'Softphone') return;
+                
+                let normalizedAgent = getMappedAgent(rawAgent);
+                row._normalizedAgent = normalizedAgent || rawAgent;
+                row.isRma = true;
+                
+                row._direction = (row['聯繫方式'] || '').toUpperCase() === 'OUTBOUND' ? 'Out' : 'In';
+                row._startTimeObj = parseDate(row['通話開始時間'] || row['服務紀錄開始時間'] || row['服務日期']);
+                row._mdn = row['進線電話/外撥電話'] || '';
+                row.Carrier = 'SYNNEX'; 
+                row.session_reason = row['主要來電原因'] || '';
+                row.session_sub_reason = row['次要來電原因'] || '';
+                row._symptoms = row['RATE 紀錄'] || '';
+                row._wrapUp = row['話後'] || '';
+
+                if (normalizedAgent && TARGET_AGENTS.includes(normalizedAgent)) {
+                    agentRmaGroups[normalizedAgent].push(row);
+                }
+            });
+
+            for (let mdn in mdnHistory) {
+                mdnHistory[mdn].sort((a, b) => (a._startTimeObj && b._startTimeObj) ? a._startTimeObj - b._startTimeObj : 0);
+            }
+
+            let sampledRows = [];
+            for (const agent of TARGET_AGENTS) {
+                const mainPool = agentMainGroups[agent] || [];
+                const rmaPool = agentRmaGroups[agent] || [];
+                sampledRows.push(...sampleForAgent(mainPool, rmaPool, agent));
+            }
+
+            sampledRows.forEach(row => {
+                row.RATE = row.isRma ? generateRmaRateText(row) : generateRateText(row);
+
+                const group = {
+                    main: row,
+                    children: []
+                };
+
+                if (row._mdn && row._startTimeObj) {
+                    const history = mdnHistory[row._mdn];
+                    if (history && history.length > 0) {
+                        const linkedRows = findLinkedOutbounds(row, history, mdnHistory);
+                        linkedRows.forEach(linked => {
+                            linked.isLinked = true;
+                            linked.Sampling_Category = `>> 關聯回電 (${row.Sampling_Category})`;
+                            linked.RATE = generateRateText(linked); 
+                            group.children.push(linked);
+                        });
+                    }
+                }
+                sampleGroups.push(group);
+            });
+
+            if (sampleGroups.length > 0) {
+                currentFilteredGroups = [...sampleGroups];
+                initFilters();
+                renderTable();
+                
+                statusArea.classList.remove('hidden');
+                countDisplay.textContent = sampleGroups.length; 
+                emptyState.classList.add('hidden');
+                resultTable.classList.remove('hidden');
+                filterBar.classList.remove('hidden');
+            } else {
+                showError("未找到符合條件的案件。");
+            }
+        }
+
+        // --- Sampling & Backfilling Core Logic ---
+        function sampleForAgent(mainPool, rmaPool, agentName) {
+            const sampled = [];
+            const usedMainIds = new Set();
+            const usedRmaIds = new Set();
+            
+            const drawCase = (pool, categoryName, isRmaPool = false) => {
+                const available = pool.filter(r => {
+                    const id = isRmaPool ? (r['維修單號'] + '_' + r['服務日期'] + '_' + r['進線電話/外撥電話']) : r.ENGAGEMENT_ID;
+                    return isRmaPool ? !usedRmaIds.has(id) : !usedMainIds.has(id);
+                });
+                if (available.length === 0) return null;
+                const idx = Math.floor(Math.random() * available.length);
+                const selected = { ...available[idx] };
+                const id = isRmaPool ? (selected['維修單號'] + '_' + selected['服務日期'] + '_' + selected['進線電話/外撥電話']) : selected.ENGAGEMENT_ID;
+                if (isRmaPool) usedRmaIds.add(id);
+                else usedMainIds.add(id);
+                
+                selected.Sampling_Category = categoryName;
+                selected.isRma = isRmaPool;
+                sampled.push(selected);
+                return selected;
+            };
+
+            const isSpecialCarrier = r => ['CHT Home', 'CHT_HOME', 'Senao', 'senao', 'SENAO'].includes(r._carrier);
+
+            const isEWS = r => {
+                if (isSpecialCarrier(r)) return true;
+                const callerTypeMatch = ['註冊用戶 - 延保服務', '註冊用戶 - 智慧放心家', '註冊用戶 - 神腦生活家'].includes(r._callerType);
+                if (callerTypeMatch && r._engagementType !== 'SOLUTO') return true;
+                
+                const symptoms = (r._symptoms || '').toLowerCase();
+                const reason = (r._sessionReason || '').toLowerCase();
+                const subReason = (r._subReason || '').toLowerCase();
+                const tradeinMatch = ['舊機回收', 'trade in', 'trade-in', 'buyback', 'buy back'].some(kw => 
+                    symptoms.includes(kw) || reason.includes(kw) || subReason.includes(kw)
+                );
+                if (tradeinMatch) return true;
+                
+                if (r._engagementType.toLowerCase().includes('ews')) return true;
+                
+                return false;
+            };
+
+            const isTCS = r => r._engagementType === 'SUR' && !isEWS(r) && r._subReason !== '門市開通服務';
+            const isTechCall = r => r._engagementType === 'SOLUTO' && !['一般詢問', '非服務範圍'].includes(r._sessionReason) && r._subReason !== '門市開通服務' && !isSpecialCarrier(r) && r._contactType === 'Call';
+            const isGeneral = r => r._engagementType === 'SOLUTO' && ['一般詢問', '非服務範圍'].includes(r._sessionReason) && !isSpecialCarrier(r);
+
+            const tcsCases = mainPool.filter(isTCS);
+            const techCallCases = mainPool.filter(isTechCall);
+            const ewsCases = mainPool.filter(isEWS);
+            const generalCases = mainPool.filter(isGeneral);
+
+            if (agentName === 'Molly Song') {
+                for (let i = 0; i < 3; i++) {
+                    drawCase(tcsCases, 'Molly_TCS');
+                }
+                const rmaCase = drawCase(rmaPool, 'Molly_RMA', true);
+                if (!rmaCase) {
+                    drawCase(tcsCases, 'Molly_RMA_Backfill_TCS');
+                }
+                drawCase(ewsCases, 'Molly_EWS');
+            } else {
+                drawCase(techCallCases, 'Tech_Call');
+                drawCase(tcsCases, 'TCS');
+                drawCase(rmaPool, 'RMA', true);
+                
+                const ewsCase = drawCase(ewsCases, 'EWS');
+                if (!ewsCase) {
+                    const tcsBf = drawCase(tcsCases, 'EWS_Backfill_TCS');
+                    if (!tcsBf) {
+                        drawCase(rmaPool, 'EWS_Backfill_RMA', true);
+                    }
+                }
+                drawCase(generalCases, 'General_Other');
+            }
+            return sampled;
+        }
+
+        // --- Linked Outbounds Logic ---
+        function findLinkedOutbounds(sourceRow, mdnHistory, allMdnHistory) {
+            let linked = [];
+            let currentMdn = sourceRow._mdn;
+            let currentHistory = mdnHistory;
+            let currentRow = sourceRow;
+
+            const isResolved = (r) => {
+                const wrapUp = String(r['WRAP_UP_CODE'] || r['_wrapUp'] || '').toUpperCase();
+                return wrapUp.includes('RESOLVED');
+            };
+
+            let ptr = currentHistory.findIndex(r => r.ENGAGEMENT_ID === currentRow.ENGAGEMENT_ID);
+            if (ptr === -1) {
+                ptr = currentHistory.findIndex(r => r._startTimeObj > currentRow._startTimeObj);
+                if (ptr === -1) return [];
+                ptr = ptr - 1; 
+            }
+
+            let safetyCount = 0;
+            const maxIterations = 50;
+
+            while (safetyCount < maxIterations) {
+                safetyCount++;
+                let switchFound = false;
+
+                const wrapUpUpper = (currentRow['WRAP_UP_CODE'] || currentRow['_wrapUp'] || '').toUpperCase();
+                
+                if (wrapUpUpper.includes('CALLBACK')) {
+                    const textToSearch = currentRow['symptoms'] || currentRow['_symptoms'] || '';
+                    const matches = textToSearch.match(/(09\d{8}|0\d{8,9})/g); 
+                    
+                    if (matches) {
+                        for (let num of matches) {
+                            if (num !== currentMdn && allMdnHistory[num]) {
+                                const targetHistory = allMdnHistory[num];
+                                const nextCall = targetHistory.find(r => 
+                                    r._startTimeObj > currentRow._startTimeObj && 
+                                    r._direction.toLowerCase() === 'out'
+                                );
+
+                                if (nextCall) {
+                                    if (!isResolved(currentRow)) {
+                                        linked.push(nextCall);
+                                        currentRow = nextCall;
+                                        currentMdn = num;
+                                        currentHistory = targetHistory;
+                                        ptr = currentHistory.findIndex(r => r.ENGAGEMENT_ID === nextCall.ENGAGEMENT_ID);
+                                        switchFound = true;
+                                        break; 
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (switchFound) continue;
+
+                if (ptr + 1 < currentHistory.length) {
+                    const nextRow = currentHistory[ptr + 1];
+                    const direction = nextRow._direction.toLowerCase();
+
+                    if (direction === 'in') {
+                        break; 
+                    }
+                    
+                    if (direction === 'out') {
+                        if (isResolved(currentRow)) {
+                            break;
+                        }
+                        
+                        linked.push(nextRow);
+                        currentRow = nextRow;
+                        ptr++;
+                        continue;
+                    }
+                    
+                    if (nextRow['Contact Type'] === 'Chat') {
+                        break;
+                    }
+
+                    ptr++;
+                } else {
+                    break;
+                }
+            }
+            
+            return linked;
+        }
+
+        // --- Filter & Sort Logic ---
+        function initFilters() {
+            const agents = [...new Set(sampleGroups.map(g => g.main._normalizedAgent))].sort();
+            filterAgent.innerHTML = '<option value="all">全部 (All)</option>' + 
+                agents.map(a => `<option value="${a}">${a}</option>`).join('');
+
+            const categories = [...new Set(sampleGroups.map(g => g.main.Sampling_Category))].sort();
+            filterCategory.innerHTML = '<option value="all">全部 (All)</option>' + 
+                categories.map(c => `<option value="${c}">${c}</option>`).join('');
+                
+            filterAgent.value = 'all';
+            filterCategory.value = 'all';
+            sortState = { key: null, asc: true };
+            resetSortIcons();
+        }
+
+        function applyFilters() {
+            const agentVal = filterAgent.value;
+            const catVal = filterCategory.value;
+
+            currentFilteredGroups = sampleGroups.filter(g => {
+                const row = g.main;
+                const matchAgent = agentVal === 'all' || row._normalizedAgent === agentVal;
+                const matchCat = catVal === 'all' || row.Sampling_Category === catVal;
+                return matchAgent && matchCat;
+            });
+
+            if (sortState.key) sortDataInternal();
+            renderTable();
+        }
+
+        function handleSort(key) {
+            if (sortState.key === key) sortState.asc = !sortState.asc;
+            else { sortState.key = key; sortState.asc = true; }
+
+            updateSortIcons(key, sortState.asc);
+            sortDataInternal();
+            renderTable();
+        }
+
+        function sortDataInternal() {
+            const key = sortState.key;
+            const asc = sortState.asc;
+
+            currentFilteredGroups.sort((a, b) => {
+                let valA = a.main[key];
+                let valB = b.main[key];
+
+                if (valA instanceof Date) valA = valA.getTime();
+                if (valB instanceof Date) valB = valB.getTime();
+                if (typeof valA === 'string') valA = valA.toLowerCase();
+                if (typeof valB === 'string') valB = valB.toLowerCase();
+                if (valA == null) valA = '';
+                if (valB == null) valB = '';
+
+                if (valA < valB) return asc ? -1 : 1;
+                if (valA > valB) return asc ? 1 : -1;
+                return 0;
+            });
+        }
+
+        function updateSortIcons(activeKey, isAsc) {
+            resetSortIcons();
+            const icon = document.getElementById(`sort-icon-${activeKey}`);
+            if (icon) icon.className = isAsc ? 'fas fa-sort-up text-blue-600 ml-1' : 'fas fa-sort-down text-blue-600 ml-1';
+        }
+
+        function resetSortIcons() {
+            document.querySelectorAll('[id^="sort-icon-"]').forEach(i => i.className = 'fas fa-sort text-gray-400 ml-1');
+        }
+
+        // --- Render Table ---
+        function renderTable() {
+            let flatData = [];
+            currentFilteredGroups.forEach(group => {
+                flatData.push(group.main);
+                flatData.push(...group.children);
+            });
+
+            const html = flatData.map(row => {
+                const rowClass = row.isLinked 
+                    ? 'linked-row border-b hover:bg-yellow-100' 
+                    : 'bg-white border-b hover:bg-gray-50';
+                
+                const directionBadge = getDirectionBadge(row);
+                const formattedTime = formatTime12Hour(row._startTimeObj) || row['START_TIME'] || row['服務日期'] || '-';
+                const mdnVal = row.isRma ? row['進線電話/外撥電話'] : row._mdn;
+                const carrierVal = row.isRma ? 'SYNNEX' : (row.Carrier || row._carrier || '-');
+                const idVal = row.isRma ? (row['維修單號'] + '_' + row['服務日期'] + '_' + row['進線電話/外撥電話']) : row.ENGAGEMENT_ID;
+
+                return `
+                <tr class="${rowClass} cursor-pointer transition-colors" onclick="toggleRowSelection(this)">
+                    <td class="px-4 py-3 font-medium text-gray-900">
+                        <div class="flex items-center">
+                            ${row.isLinked ? '<i class="fas fa-reply fa-rotate-180 mr-2 text-yellow-500"></i>' : ''}
+                            ${row._normalizedAgent}
+                        </div>
+                    </td>
+                    <td class="px-4 py-3">
+                        <span class="inline-block text-xs font-medium px-2.5 py-0.5 rounded border whitespace-nowrap ${row.isLinked ? 'bg-yellow-100 text-yellow-800 border-yellow-300' : 'bg-blue-100 text-blue-800 border-blue-400'}">
+                            ${row.Sampling_Category}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3">${directionBadge}</td>
+                    <td class="px-4 py-3 font-mono whitespace-nowrap">${formattedTime}</td>
+                    <td class="px-4 py-3 font-mono text-gray-600">${mdnVal || '-'}</td>
+                    <td class="px-4 py-3">${carrierVal || '-'}</td>
+                    <td class="px-4 py-3">${row.session_reason || row._sessionReason || '-'}</td>
+                    <td class="px-4 py-3">${row.session_sub_reason || row._subReason || '-'}</td>
+                    <td class="px-4 py-3">
+                        <div class="flex items-start justify-between gap-2">
+                            <div class="rate-cell" id="rate-${idVal}">${row.RATE || '-'}</div>
+                            <button onclick="copyRateContent('${idVal}', event)" class="flex-shrink-0 text-gray-400 hover:text-blue-600 p-1.5 rounded hover:bg-blue-50 transition-colors" title="複製內容">
+                                <i class="fas fa-copy" id="icon-${idVal}"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `}).join('');
+            tableBody.innerHTML = html;
+        }
+
+        // --- Download Functions ---
+        function downloadCSV() {
+            let flatData = [];
+            currentFilteredGroups.forEach(group => {
+                flatData.push(group.main);
+                flatData.push(...group.children);
+            });
+
+            if (flatData.length === 0) return;
+
+            const columns = [
+                { label: 'Agent', key: '_normalizedAgent' },
+                { label: 'Category', key: 'Sampling_Category' },
+                { label: 'Direction', key: '_direction' },
+                { label: 'Start_Time', key: 'START_TIME' },
+                { label: 'MDN', key: '_mdn' },
+                { label: 'Carrier', key: 'Carrier' },
+                { label: 'Reason', key: 'session_reason' },
+                { label: 'Sub_Reason', key: 'session_sub_reason' },
+                { label: 'RATE', key: 'RATE' }
+            ];
+
+            const csvContent = [
+                columns.map(c => c.label).join(','),
+                ...flatData.map(row => 
+                    columns.map(col => {
+                        let val = "";
+                        if (row.isRma) {
+                            if (col.key === 'START_TIME') val = row['服務日期'] || '';
+                            else if (col.key === 'MDN') val = row['進線電話/外撥電話'] || '';
+                            else if (col.key === 'Carrier') val = 'SYNNEX';
+                            else if (col.key === 'Reason') val = row['主要來電原因'] || '';
+                            else if (col.key === 'Sub_Reason') val = row['次要來電原因'] || '';
+                            else val = row[col.key] || '';
+                        } else {
+                            val = row[col.key] || row[col.label] || '';
+                            if (col.key === '_direction' && row['Contact Type'] === 'Chat') val = 'Chat';
+                        }
+                        
+                        if (typeof val === 'string') {
+                             val = val.replace(/"/g, '""');
+                             if (val.includes(',') || val.includes('"') || val.includes('\n')) val = `"${val}"`;
+                        }
+                        return val;
+                    }).join(',')
+                )
+            ].join('\n');
+
+            const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", `QA_Sampled_${new Date().toISOString().split('T')[0]}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function downloadImage() {
+            const element = document.getElementById('resultTable');
+            
+            const copyButtons = element.querySelectorAll('button[title="複製內容"]');
+            copyButtons.forEach(btn => btn.style.display = 'none');
+
+            if (typeof html2canvas === 'undefined') {
+                alert('圖片轉換套件尚未載入完成，請稍後再試。');
+                copyButtons.forEach(btn => btn.style.display = '');
+                return;
+            }
+
+            html2canvas(element, { 
+                scale: 2, 
+                windowWidth: element.scrollWidth,
+                backgroundColor: '#ffffff'
+            }).then(canvas => {
+                const imgData = canvas.toDataURL('image/png');
+                
+                const link = document.createElement('a');
+                link.download = `QA_Sampling_Result_${new Date().toISOString().split('T')[0]}.png`;
+                link.href = imgData;
+                link.click();
+
+                copyButtons.forEach(btn => btn.style.display = '');
+            }).catch(err => {
+                console.error('Error generating image:', err);
+                alert('產生圖片失敗，請檢查主控台。');
+                copyButtons.forEach(btn => btn.style.display = '');
+            });
+        }
+    </script>
+</body>
+</html>
