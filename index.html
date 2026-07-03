@@ -56,6 +56,8 @@
             background-color: #fef08a !important; /* Tailwind yellow-200 */
         }
     </style>
+    <!-- ExcelJS for styling preservation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 </head>
 <body class="bg-gray-50 min-h-screen p-4 md:p-8">
 
@@ -299,13 +301,20 @@
         let rmaData = null;
         let templateWorkbook = null;
         
-        function loadEmbeddedTemplate() {
+        async function loadEmbeddedTemplate() {
             try {
-                templateWorkbook = XLSX.read(TEMPLATE_BASE64, { type: 'base64', cellDates: true });
+                const binaryString = atob(TEMPLATE_BASE64);
+                const len = binaryString.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                templateWorkbook = new ExcelJS.Workbook();
+                await templateWorkbook.xlsx.load(bytes.buffer);
                 templateFileName = "NewHERO_Template.xlsx";
-                console.log("Embedded template loaded successfully!");
+                console.log("Embedded template loaded successfully using ExcelJS!");
             } catch (err) {
-                console.error("Failed to load embedded template:", err);
+                console.error("Failed to load embedded template using ExcelJS:", err);
             }
         }
         
@@ -1277,19 +1286,62 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
         }
 
         // --- Scorecard Excel Exporting ---
-        function copySheet(ws) {
-            const newWs = {};
-            for (let cellId in ws) {
-                if (ws.hasOwnProperty(cellId)) {
-                    const val = ws[cellId];
-                    if (cellId.startsWith('!')) {
-                        newWs[cellId] = JSON.parse(JSON.stringify(val));
-                    } else {
-                        newWs[cellId] = { ...val };
-                    }
+        function copyWorksheet(sourceSheet, targetSheet) {
+            // 1. Copy columns properties (especially width)
+            sourceSheet.columns.forEach((col, colNumber) => {
+                if (col.width !== undefined) {
+                    targetSheet.getColumn(colNumber).width = col.width;
                 }
+            });
+
+            // 2. Copy cell values and styles cell-by-cell
+            sourceSheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+                const targetRow = targetSheet.getRow(rowNumber);
+                
+                if (row.height !== undefined) {
+                    targetRow.height = row.height;
+                }
+
+                row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                    const targetCell = targetRow.getCell(colNumber);
+                    
+                    // Copy value
+                    targetCell.value = cell.value;
+                    
+                    // Copy style object deeply
+                    if (cell.style) {
+                        targetCell.style = JSON.parse(JSON.stringify(cell.style));
+                    }
+                });
+                
+                targetRow.commit();
+            });
+
+            // 3. Copy merged cells
+            if (sourceSheet.eachMerge) {
+                sourceSheet.eachMerge(merge => {
+                    targetSheet.mergeCells(merge.top, merge.left, merge.bottom, merge.right);
+                });
+            } else if (sourceSheet.model && sourceSheet.model.merges) {
+                sourceSheet.model.merges.forEach(mergeRange => {
+                    targetSheet.mergeCells(mergeRange);
+                });
             }
-            return newWs;
+
+            // 4. Copy sheet views (like gridlines visibility, freeze panes)
+            if (sourceSheet.views) {
+                targetSheet.views = JSON.parse(JSON.stringify(sourceSheet.views));
+            }
+        }
+
+        function getColumnLetter(colIndex) {
+            let temp, letter = '';
+            while (colIndex > 0) {
+                temp = (colIndex - 1) % 26;
+                letter = String.fromCharCode(65 + temp) + letter;
+                colIndex = (colIndex - temp - 1) / 26;
+            }
+            return letter;
         }
 
         function constructRecordingFilename(row, sheetName, agentName) {
@@ -1308,15 +1360,15 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
             return `${dateStr}_${timeStr}_${mdnStr}_${cleanAgent}_${sheetName}`;
         }
 
-        function exportScorecards() {
+        async function exportScorecards() {
             try {
                 if (!templateWorkbook || sampleGroups.length === 0) {
                     alert("請先上傳報表檔案，並等待抽樣完成。");
                     return;
                 }
                 
-                if (typeof JSZip === 'undefined') {
-                    alert("壓縮元件 (JSZip) 載入中或載入失敗，請確認網路連線是否正常。");
+                if (typeof JSZip === 'undefined' || typeof ExcelJS === 'undefined') {
+                    alert("必備的 JS 程式庫 (JSZip 或 ExcelJS) 尚未載入完成，請確認網路連線是否正常。");
                     return;
                 }
                 
@@ -1337,24 +1389,32 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                 
                 const keepSheets = ['Call_Chat_FileName (2)', 'H', 'E', 'R', 'O'];
                 
+                // Write template workbook to buffer so we can clone it
+                const templateBuffer = await templateWorkbook.xlsx.writeBuffer();
+                
                 for (let agentName in agentSampleMap) {
                     const cases = agentSampleMap[agentName];
                     if (cases.length === 0) continue;
                     
-                    // Write template to buffer and parse back to ensure no reference leaks
-                    const tplWbout = XLSX.write(templateWorkbook, { bookType: 'xlsx', type: 'array' });
-                    const wb = XLSX.read(tplWbout, { type: 'array', cellDates: true });
+                    // Create a fresh clone of the template workbook
+                    const wb = new ExcelJS.Workbook();
+                    await wb.xlsx.load(templateBuffer);
                     
-                    // Delete existing score sheets (like Alex Chen's) that are not in template keepSheets
-                    wb.SheetNames = wb.SheetNames.filter(name => keepSheets.includes(name));
-                    for (let sheetName in wb.Sheets) {
-                        if (!keepSheets.includes(sheetName)) {
-                            delete wb.Sheets[sheetName];
-                        }
+                    // Delete existing non-template worksheets
+                    const toRemove = wb.worksheets.filter(sheet => !keepSheets.includes(sheet.name));
+                    toRemove.forEach(sheet => {
+                        wb.removeWorksheet(sheet.id);
+                    });
+                    
+                    const sourceSheet = wb.getWorksheet('Call_Chat_FileName (2)');
+                    if (!sourceSheet) {
+                        alert("找不到內置評分範本工作表：Call_Chat_FileName (2)");
+                        return;
                     }
                     
                     let tcsIdx = 1;
-                    cases.forEach(caseGroup => {
+                    for (let idx = 0; idx < cases.length; idx++) {
+                        const caseGroup = cases[idx];
                         const caseRow = caseGroup.main;
                         const carrier = caseRow.Carrier || caseRow._carrier || 'FET';
                         let sheetName = "";
@@ -1375,41 +1435,43 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                             }
                         }
                         
-                        const sourceSheet = wb.Sheets['Call_Chat_FileName (2)'];
-                        if (!sourceSheet) return;
-                        
-                        const newSheet = copySheet(sourceSheet);
-                        
-                        // Deduplicate sheet name to prevent SheetJS writing errors
+                        // Deduplicate sheet name in the cloned workbook
                         let uniqueSheetName = sheetName;
                         let suffix = 1;
-                        while (wb.SheetNames.includes(uniqueSheetName)) {
+                        while (wb.worksheets.some(s => s.name === uniqueSheetName)) {
                             uniqueSheetName = `${sheetName}${suffix}`;
                             suffix++;
                         }
                         sheetName = uniqueSheetName;
                         
-                        wb.SheetNames.push(sheetName);
-                        wb.Sheets[sheetName] = newSheet;
+                        // Add new worksheet and copy all values, styles, column widths, row heights, and merges
+                        const targetSheet = wb.addWorksheet(sheetName);
+                        copyWorksheet(sourceSheet, targetSheet);
+                        targetSheet.state = 'visible'; // Ensure it is visible!
                         
+                        // Fill in C15 (MDN)
                         const mdnVal = caseRow.isRma ? caseRow['進線電話/外撥電話'] : caseRow._mdn;
-                        newSheet['C15'] = { t: 's', v: mdnVal || '-' };
+                        targetSheet.getCell('C15').value = mdnVal || '-';
                         
+                        // Fill in C16 (Filename)
                         const recFilename = constructRecordingFilename(caseRow, sheetName, agentName);
-                        newSheet['C16'] = { t: 's', v: recFilename };
+                        targetSheet.getCell('C16').value = recFilename;
                         
-                        newSheet['J17'] = { t: 's', v: caseRow.RATE };
+                        // Fill in J17 (Main RATE)
+                        targetSheet.getCell('J17').value = caseRow.RATE;
                         
+                        // Fill in K17, L17... for linked outbound calls
                         if (caseGroup.children && caseGroup.children.length > 0) {
                             caseGroup.children.forEach((child, lIdx) => {
-                                const colLetter = XLSX.utils.encode_col(10 + lIdx); // Column K starts at index 10
+                                const colLetter = getColumnLetter(11 + lIdx); // Column K is index 11
                                 const cellRef = `${colLetter}17`;
-                                newSheet[cellRef] = { t: 's', v: child.RATE };
+                                targetSheet.getCell(cellRef).value = child.RATE;
                             });
                         }
-                    });
+                    }
                     
-                    const agentWbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+                    // Write agent workbook to buffer
+                    const agentBuffer = await wb.xlsx.writeBuffer();
                     
                     let dateSuffix = "202606";
                     const firstCase = cases[0].main;
@@ -1421,7 +1483,7 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                     }
                     
                     const agentFileName = `NewHERO_${agentName}_Score_${dateSuffix}.xlsx`;
-                    zip.file(agentFileName, agentWbout);
+                    zip.file(agentFileName, agentBuffer);
                 }
                 
                 zip.generateAsync({ type: 'blob' }).then(function(content) {
