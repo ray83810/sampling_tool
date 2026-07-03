@@ -1286,58 +1286,7 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
         }
 
         // --- Scorecard Excel Exporting ---
-        function copyWorksheet(sourceSheet, targetSheet) {
-            // 1. Copy columns properties (especially width)
-            if (sourceSheet.columns) {
-                sourceSheet.columns.forEach((col, index) => {
-                    if (col) {
-                        const colNum = col.number || (index + 1);
-                        if (col.width !== undefined) {
-                            targetSheet.getColumn(colNum).width = col.width;
-                        }
-                    }
-                });
-            }
 
-            // 2. Copy cell values and styles cell-by-cell
-            sourceSheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
-                const targetRow = targetSheet.getRow(rowNumber);
-                
-                if (row.height !== undefined) {
-                    targetRow.height = row.height;
-                }
-
-                row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-                    const targetCell = targetRow.getCell(colNumber);
-                    
-                    // Copy value
-                    targetCell.value = cell.value;
-                    
-                    // Copy style object deeply
-                    if (cell.style) {
-                        targetCell.style = JSON.parse(JSON.stringify(cell.style));
-                    }
-                });
-                
-                targetRow.commit();
-            });
-
-            // 3. Copy merged cells
-            if (sourceSheet.eachMerge) {
-                sourceSheet.eachMerge(merge => {
-                    targetSheet.mergeCells(merge.top, merge.left, merge.bottom, merge.right);
-                });
-            } else if (sourceSheet.model && sourceSheet.model.merges) {
-                sourceSheet.model.merges.forEach(mergeRange => {
-                    targetSheet.mergeCells(mergeRange);
-                });
-            }
-
-            // 4. Copy sheet views (like gridlines visibility, freeze panes)
-            if (sourceSheet.views) {
-                targetSheet.views = JSON.parse(JSON.stringify(sourceSheet.views));
-            }
-        }
 
         function getColumnLetter(colIndex) {
             let temp, letter = '';
@@ -1449,9 +1398,12 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                         }
                         sheetName = uniqueSheetName;
                         
-                        // Add new worksheet and copy all values, styles, column widths, row heights, and merges
+                        // Add target worksheet and clone model deeply to preserve all styles, validations, merges, and conditional formattings
                         const targetSheet = wb.addWorksheet(sheetName);
-                        copyWorksheet(sourceSheet, targetSheet);
+                        const clonedModel = JSON.parse(JSON.stringify(sourceSheet.model));
+                        clonedModel.name = sheetName;
+                        clonedModel.id = targetSheet.id;
+                        targetSheet.model = clonedModel;
                         targetSheet.state = 'visible'; // Ensure it is visible!
                         
                         // Fill in C15 (MDN)
