@@ -1288,11 +1288,16 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
         // --- Scorecard Excel Exporting ---
         function copyWorksheet(sourceSheet, targetSheet) {
             // 1. Copy columns properties (especially width)
-            sourceSheet.columns.forEach((col, colNumber) => {
-                if (col.width !== undefined) {
-                    targetSheet.getColumn(colNumber).width = col.width;
-                }
-            });
+            if (sourceSheet.columns) {
+                sourceSheet.columns.forEach((col, index) => {
+                    if (col) {
+                        const colNum = col.number || (index + 1);
+                        if (col.width !== undefined) {
+                            targetSheet.getColumn(colNum).width = col.width;
+                        }
+                    }
+                });
+            }
 
             // 2. Copy cell values and styles cell-by-cell
             sourceSheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
