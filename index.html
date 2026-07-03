@@ -300,13 +300,7 @@
         
         function loadEmbeddedTemplate() {
             try {
-                const binaryString = atob(TEMPLATE_BASE64);
-                const len = binaryString.length;
-                const bytes = new Uint8Array(len);
-                for (let i = 0; i < len; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
-                templateWorkbook = XLSX.read(bytes.buffer, { type: 'array', cellDates: true });
+                templateWorkbook = XLSX.read(TEMPLATE_BASE64, { type: 'base64', cellDates: true });
                 templateFileName = "NewHERO_Template.xlsx";
                 console.log("Embedded template loaded successfully!");
             } catch (err) {
@@ -1314,116 +1308,136 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
         }
 
         function exportScorecards() {
-            if (!templateWorkbook || sampleGroups.length === 0) {
-                alert("請先上傳評分範本與報表檔案，並等待抽樣完成。");
-                return;
-            }
-            
-            const zip = new JSZip();
-            const agentSampleMap = {};
-            
-            sampleGroups.forEach(group => {
-                const mainCase = group.main;
-                const agent = mainCase._normalizedAgent;
-                if (!agentSampleMap[agent]) {
-                    agentSampleMap[agent] = [];
+            try {
+                if (!templateWorkbook || sampleGroups.length === 0) {
+                    alert("請先上傳報表檔案，並等待抽樣完成。");
+                    return;
                 }
-                agentSampleMap[agent].push({
-                    main: mainCase,
-                    children: group.children || []
-                });
-            });
-            
-            const keepSheets = ['Call_Chat_FileName (2)', 'H', 'E', 'R', 'O'];
-            
-            for (let agentName in agentSampleMap) {
-                const cases = agentSampleMap[agentName];
-                if (cases.length === 0) continue;
                 
-                // Write template to buffer and parse back to ensure no reference leaks
-                const tplWbout = XLSX.write(templateWorkbook, { bookType: 'xlsx', type: 'array' });
-                const wb = XLSX.read(tplWbout, { type: 'array', cellDates: true });
+                if (typeof JSZip === 'undefined') {
+                    alert("壓縮元件 (JSZip) 載入中或載入失敗，請確認網路連線是否正常。");
+                    return;
+                }
                 
-                // Delete existing score sheets (like Alex Chen's) that are not in template keepSheets
-                wb.SheetNames = wb.SheetNames.filter(name => keepSheets.includes(name));
-                for (let sheetName in wb.Sheets) {
-                    if (!keepSheets.includes(sheetName)) {
-                        delete wb.Sheets[sheetName];
+                const zip = new JSZip();
+                const agentSampleMap = {};
+                
+                sampleGroups.forEach(group => {
+                    const mainCase = group.main;
+                    const agent = mainCase._normalizedAgent;
+                    if (!agentSampleMap[agent]) {
+                        agentSampleMap[agent] = [];
                     }
-                }
+                    agentSampleMap[agent].push({
+                        main: mainCase,
+                        children: group.children || []
+                    });
+                });
                 
-                let tcsIdx = 1;
-                cases.forEach(caseGroup => {
-                    const caseRow = caseGroup.main;
-                    const carrier = caseRow.Carrier || caseRow._carrier || 'FET';
-                    let sheetName = "";
+                const keepSheets = ['Call_Chat_FileName (2)', 'H', 'E', 'R', 'O'];
+                
+                for (let agentName in agentSampleMap) {
+                    const cases = agentSampleMap[agentName];
+                    if (cases.length === 0) continue;
                     
-                    if (caseRow.isRma) {
-                        sheetName = `${carrier}_RMA_IB`;
-                    } else {
-                        const cat = caseRow.Sampling_Category;
-                        if (cat.includes('TCS')) {
-                            sheetName = `${carrier}_SUR_IB_${String(tcsIdx).padStart(2, '0')}`;
-                            tcsIdx++;
-                        } else if (cat.includes('Tech_Call')) {
-                            sheetName = `${carrier}_Tech_IB`;
-                        } else if (cat.includes('General')) {
-                            sheetName = `${carrier}_Inquiry_IB`;
-                        } else {
-                            sheetName = `${carrier}_EWS_IB`;
+                    // Write template to buffer and parse back to ensure no reference leaks
+                    const tplWbout = XLSX.write(templateWorkbook, { bookType: 'xlsx', type: 'array' });
+                    const wb = XLSX.read(tplWbout, { type: 'array', cellDates: true });
+                    
+                    // Delete existing score sheets (like Alex Chen's) that are not in template keepSheets
+                    wb.SheetNames = wb.SheetNames.filter(name => keepSheets.includes(name));
+                    for (let sheetName in wb.Sheets) {
+                        if (!keepSheets.includes(sheetName)) {
+                            delete wb.Sheets[sheetName];
                         }
                     }
                     
-                    const sourceSheet = wb.Sheets['Call_Chat_FileName (2)'];
-                    if (!sourceSheet) return;
+                    let tcsIdx = 1;
+                    cases.forEach(caseGroup => {
+                        const caseRow = caseGroup.main;
+                        const carrier = caseRow.Carrier || caseRow._carrier || 'FET';
+                        let sheetName = "";
+                        
+                        if (caseRow.isRma) {
+                            sheetName = `${carrier}_RMA_IB`;
+                        } else {
+                            const cat = caseRow.Sampling_Category;
+                            if (cat.includes('TCS')) {
+                                sheetName = `${carrier}_SUR_IB_${String(tcsIdx).padStart(2, '0')}`;
+                                tcsIdx++;
+                            } else if (cat.includes('Tech_Call')) {
+                                sheetName = `${carrier}_Tech_IB`;
+                            } else if (cat.includes('General')) {
+                                sheetName = `${carrier}_Inquiry_IB`;
+                            } else {
+                                sheetName = `${carrier}_EWS_IB`;
+                            }
+                        }
+                        
+                        const sourceSheet = wb.Sheets['Call_Chat_FileName (2)'];
+                        if (!sourceSheet) return;
+                        
+                        const newSheet = copySheet(sourceSheet);
+                        
+                        // Deduplicate sheet name to prevent SheetJS writing errors
+                        let uniqueSheetName = sheetName;
+                        let suffix = 1;
+                        while (wb.SheetNames.includes(uniqueSheetName)) {
+                            uniqueSheetName = `${sheetName}${suffix}`;
+                            suffix++;
+                        }
+                        sheetName = uniqueSheetName;
+                        
+                        wb.SheetNames.push(sheetName);
+                        wb.Sheets[sheetName] = newSheet;
+                        
+                        const mdnVal = caseRow.isRma ? caseRow['進線電話/外撥電話'] : caseRow._mdn;
+                        newSheet['C15'] = { t: 's', v: mdnVal || '-' };
+                        
+                        const recFilename = constructRecordingFilename(caseRow, sheetName, agentName);
+                        newSheet['C16'] = { t: 's', v: recFilename };
+                        
+                        newSheet['J17'] = { t: 's', v: caseRow.RATE };
+                        
+                        if (caseGroup.children && caseGroup.children.length > 0) {
+                            caseGroup.children.forEach((child, lIdx) => {
+                                const colLetter = XLSX.utils.encode_col(10 + lIdx); // Column K starts at index 10
+                                const cellRef = `${colLetter}17`;
+                                newSheet[cellRef] = { t: 's', v: child.RATE };
+                            });
+                        }
+                    });
                     
-                    const newSheet = copySheet(sourceSheet);
-                    wb.SheetNames.push(sheetName);
-                    wb.Sheets[sheetName] = newSheet;
+                    const agentWbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
                     
-                    const mdnVal = caseRow.isRma ? caseRow['進線電話/外撥電話'] : caseRow._mdn;
-                    newSheet['C15'] = { t: 's', v: mdnVal || '-' };
-                    
-                    const recFilename = constructRecordingFilename(caseRow, sheetName, agentName);
-                    newSheet['C16'] = { t: 's', v: recFilename };
-                    
-                    newSheet['J17'] = { t: 's', v: caseRow.RATE };
-                    
-                    if (caseGroup.children && caseGroup.children.length > 0) {
-                        caseGroup.children.forEach((child, lIdx) => {
-                            const colLetter = XLSX.utils.encode_col(10 + lIdx); // Column K starts at index 10
-                            const cellRef = `${colLetter}17`;
-                            newSheet[cellRef] = { t: 's', v: child.RATE };
-                        });
+                    let dateSuffix = "202606";
+                    const firstCase = cases[0].main;
+                    if (firstCase._startTimeObj && typeof firstCase._startTimeObj.getFullYear === 'function') {
+                        const d = firstCase._startTimeObj;
+                        const y = d.getFullYear();
+                        const m = String(d.getMonth() + 1).padStart(2, '0');
+                        dateSuffix = `${y}${m}`;
                     }
-                });
-                
-                const agentWbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-                
-                let dateSuffix = "202606";
-                const firstCase = cases[0].main;
-                if (firstCase._startTimeObj) {
-                    const d = firstCase._startTimeObj;
-                    const y = d.getFullYear();
-                    const m = String(d.getMonth() + 1).padStart(2, '0');
-                    dateSuffix = `${y}${m}`;
+                    
+                    const agentFileName = `NewHERO_${agentName}_Score_${dateSuffix}.xlsx`;
+                    zip.file(agentFileName, agentWbout);
                 }
                 
-                const agentFileName = `NewHERO_${agentName}_Score_${dateSuffix}.xlsx`;
-                zip.file(agentFileName, agentWbout);
+                zip.generateAsync({ type: 'blob' }).then(function(content) {
+                    const url = URL.createObjectURL(content);
+                    const link = document.createElement("a");
+                    link.href = url;
+                    link.download = `NewHERO_QA_Scorecards_${new Date().toISOString().split('T')[0]}.zip`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }).catch(err => {
+                    alert("打包壓縮檔失敗: " + err.message);
+                });
+            } catch (err) {
+                alert("匯出評分表發生錯誤: " + err.message + "\n" + err.stack);
+                console.error(err);
             }
-            
-            zip.generateAsync({ type: 'blob' }).then(function(content) {
-                const url = URL.createObjectURL(content);
-                const link = document.createElement("a");
-                link.href = url;
-                link.download = `NewHERO_QA_Scorecards_${new Date().toISOString().split('T')[0]}.zip`;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-            }).catch(err => {
-                alert("打包壓縮檔失敗: " + err.message);
-            });
         }
     </script>
 </body>
