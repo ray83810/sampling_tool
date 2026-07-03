@@ -10,6 +10,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <!-- HTML2Canvas -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- JSZip for scorecard zipping -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Font Awesome -->
@@ -61,7 +63,7 @@
         <div class="bg-white p-6 text-gray-900 border-b border-gray-200">
             <h1 class="text-2xl font-bold"><i class="fas fa-tasks mr-2 text-blue-600"></i> QA 評比案件自動抽樣系統</h1>
             
-            <p class="mt-2 text-lg font-bold text-[#6A6AFF]">請上傳「主報表 (Data)」與「維修中心報表 (call-records)」以進行抽樣。</p>
+            <p class="mt-2 text-lg font-bold text-[#6A6AFF]">請上傳「主報表 (Data)」、「維修中心報表 (call-records)」與「評分範本 (Scorecard)」以進行抽樣。</p>
             
             <div class="mt-2 text-gray-600 text-sm flex items-center flex-wrap">
                 <span>Inbound 抽樣 + 自動帶出後續 Outbound 關聯案件 (直到服務結束)。</span>
@@ -81,7 +83,7 @@
                     <p class="text-gray-600 font-medium">點擊或拖曳檔案至此 (支援同時拖放多個檔案)</p>
                     
                     <!-- File Status Badges -->
-                    <div class="flex justify-center gap-6 mt-4">
+                    <div class="flex justify-center gap-6 mt-4 flex-wrap">
                         <div id="status-main" class="flex items-center text-xs px-3 py-1.5 rounded-full border bg-gray-100 text-gray-500 border-gray-300 transition-all duration-300">
                             <i class="fas fa-circle mr-2 text-gray-400" id="icon-main"></i>
                             <span id="text-main">主報表 (Data) - 未上傳</span>
@@ -89,6 +91,10 @@
                         <div id="status-rma" class="flex items-center text-xs px-3 py-1.5 rounded-full border bg-gray-100 text-gray-500 border-gray-300 transition-all duration-300">
                             <i class="fas fa-circle mr-2 text-gray-400" id="icon-rma"></i>
                             <span id="text-rma">維修中心報表 (call-records) - 未上傳</span>
+                        </div>
+                        <div id="status-tpl" class="flex items-center text-xs px-3 py-1.5 rounded-full border bg-gray-100 text-gray-500 border-gray-300 transition-all duration-300">
+                            <i class="fas fa-circle mr-2 text-gray-400" id="icon-tpl"></i>
+                            <span id="text-tpl">評分範本 (Scorecard) - 未上傳</span>
                         </div>
                     </div>
                     
@@ -113,6 +119,9 @@
                         </button>
                         <button id="downloadImageBtn" onclick="downloadImage()" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded shadow transition text-sm">
                             <i class="fas fa-image mr-2"></i>下載圖片
+                        </button>
+                        <button id="exportScorecardsBtn" onclick="exportScorecards()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded shadow transition text-sm hidden">
+                            <i class="fas fa-file-excel mr-2"></i>一鍵匯出評分表 (ZIP)
                         </button>
                         <button id="clearBtn" onclick="clearData()" class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded shadow transition text-sm">
                             <i class="fas fa-trash-alt mr-2"></i>清除資料
@@ -284,8 +293,10 @@
         // --- State ---
         let mainData = null;
         let rmaData = null;
+        let templateWorkbook = null;
         let mainFileName = "";
         let rmaFileName = "";
+        let templateFileName = "";
         
         let sampleGroups = []; 
         let currentFilteredGroups = []; 
@@ -322,14 +333,13 @@
             return s; 
         }
 
+        // --- Logic: Map Resolution ---
         function mapResolution(val) {
             if (!val) return '-';
             const s = String(val).trim().toUpperCase(); 
             
-            if (s === 'YES') return '1';
-            if (s === 'NO') return '2';
-            if (s.includes('已解決')) return '1';
-            if (s.includes('未解決')) return '2';
+            if (s === 'YES' || s.includes('已解決')) return '1';
+            if (s === 'NO' || s.includes('未解決')) return '2';
             
             return s;
         }
@@ -353,7 +363,7 @@
             }
         }
 
-        // --- Logic: Rate Text for Main Report ---
+        // --- Logic: Rate Text ---
         function generateRateText(row) {
             let dirStr = '';
             const rawDir = getDirectionLabel(row);
@@ -485,13 +495,17 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
         function clearData() {
             mainData = null;
             rmaData = null;
+            templateWorkbook = null;
             mainFileName = "";
             rmaFileName = "";
-            sampleGroups = [];
-            currentFilteredGroups = [];
+            templateFileName = "";
+            
+            sampleGroups = []; 
+            currentFilteredGroups = []; 
             
             updateStatusBadge('main', false);
             updateStatusBadge('rma', false);
+            updateStatusBadge('tpl', false);
             
             statusArea.classList.add('hidden');
             errorArea.classList.add('hidden');
@@ -499,6 +513,7 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
             resultTable.classList.add('hidden');
             filterBar.classList.add('hidden');
             emptyState.classList.remove('hidden');
+            document.getElementById('exportScorecardsBtn').classList.add('hidden');
             tableBody.innerHTML = '';
             fileInput.value = "";
         }
@@ -511,22 +526,24 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
             if (isLoaded) {
                 badge.className = "flex items-center text-xs px-3 py-1.5 rounded-full border bg-green-50 text-green-700 border-green-300 transition-all duration-300 font-bold";
                 icon.className = "fas fa-check-circle text-green-500 mr-2";
-                text.textContent = type === 'main' ? `主報表: ${fileName}` : `維修中心報表: ${fileName}`;
+                
+                let label = "";
+                if (type === 'main') label = "主報表";
+                else if (type === 'rma') label = "維修中心報表";
+                else label = "評分範本";
+                
+                text.textContent = `${label}: ${fileName}`;
             } else {
                 badge.className = "flex items-center text-xs px-3 py-1.5 rounded-full border bg-gray-100 text-gray-500 border-gray-300 transition-all duration-300";
                 icon.className = "fas fa-circle text-gray-400 mr-2";
-                text.textContent = type === 'main' ? "主報表 (Data) - 未上傳" : "維修中心報表 (call-records) - 未上傳";
+                
+                let label = "";
+                if (type === 'main') label = "主報表 (Data) - 未上傳";
+                else if (type === 'rma') label = "維修中心報表 (call-records) - 未上傳";
+                else label = "評分範本 (Scorecard) - 未上傳";
+                
+                text.textContent = label;
             }
-        }
-
-        function showWarning(msg) {
-            warningArea.classList.remove('hidden');
-            document.getElementById('warning-text').textContent = msg;
-        }
-
-        function showError(msg) {
-            errorArea.classList.remove('hidden');
-            document.getElementById('error-text').textContent = msg;
         }
 
         // --- File Handlers ---
@@ -581,13 +598,16 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                     if (mainData && rmaData) {
                         try {
                             processData(mainData, rmaData);
+                            if (!templateWorkbook) {
+                                showWarning("抽樣完成！您可再上傳「評分範本 (Scorecard)」Excel檔案以啟用一鍵匯出 Excel 評分表功能。");
+                            }
                         } catch (err) {
                             showError("處理資料時發生錯誤: " + err.message);
                         }
                     } else if (mainData) {
-                        showWarning("主報表已載入，請上傳「維修中心報表 (call-records)」檔案以進行抽樣。");
+                        showWarning("主報表已載入，請上傳「維修中心報表 (call-records)」以進行抽樣。");
                     } else if (rmaData) {
-                        showWarning("維修中心報表已載入，請上傳「主報表 (Data)」檔案以進行抽樣。");
+                        showWarning("維修中心報表已載入，請上傳「主報表 (Data)」以進行抽樣。");
                     }
                 }
             }
@@ -602,12 +622,25 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                 rmaData = parsed.data;
                 rmaFileName = fileName;
                 updateStatusBadge('rma', true, fileName);
+            } else if (parsed.type === 'TEMPLATE') {
+                templateWorkbook = parsed.data;
+                templateFileName = fileName;
+                updateStatusBadge('tpl', true, fileName);
+                if (sampleGroups.length > 0) {
+                    document.getElementById('exportScorecardsBtn').classList.remove('hidden');
+                }
             }
         }
 
         // --- Workbook Header Scanning & Parsing ---
         function parseRawWorkbook(workbook) {
-            const sheetName = workbook.SheetNames[0];
+            const sheetNames = workbook.SheetNames;
+            // Identify template file by containing specific criteria sheets
+            if (sheetNames.includes('Call_Chat_FileName (2)') && sheetNames.includes('H') && sheetNames.includes('E')) {
+                return { type: 'TEMPLATE', data: workbook };
+            }
+            
+            const sheetName = sheetNames[0];
             const worksheet = workbook.Sheets[sheetName];
             const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
             return parseRawData(rows);
@@ -836,6 +869,11 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                 emptyState.classList.add('hidden');
                 resultTable.classList.remove('hidden');
                 filterBar.classList.remove('hidden');
+                
+                // Show export scorecard button if template workbook is loaded
+                if (templateWorkbook) {
+                    document.getElementById('exportScorecardsBtn').classList.remove('hidden');
+                }
             } else {
                 showError("未找到符合條件的案件。");
             }
@@ -1220,6 +1258,151 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                 console.error('Error generating image:', err);
                 alert('產生圖片失敗，請檢查主控台。');
                 copyButtons.forEach(btn => btn.style.display = '');
+            });
+        }
+
+        // --- Scorecard Excel Exporting ---
+        function copySheet(ws) {
+            const newWs = {};
+            for (let cellId in ws) {
+                if (ws.hasOwnProperty(cellId)) {
+                    const val = ws[cellId];
+                    if (cellId.startsWith('!')) {
+                        newWs[cellId] = JSON.parse(JSON.stringify(val));
+                    } else {
+                        newWs[cellId] = { ...val };
+                    }
+                }
+            }
+            return newWs;
+        }
+
+        function constructRecordingFilename(row, sheetName, agentName) {
+            const dateObj = row._startTimeObj || new Date();
+            const yyyy = dateObj.getFullYear();
+            const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
+            const dd = String(dateObj.getDate()).padStart(2, '0');
+            const hh = String(dateObj.getHours()).padStart(2, '0');
+            const min = String(dateObj.getMinutes()).padStart(2, '0');
+            
+            const dateStr = `${yyyy}${mm}${dd}`;
+            const timeStr = `${hh}${min}`;
+            const mdnStr = row.isRma ? row['進線電話/外撥電話'] : row._mdn;
+            const cleanAgent = agentName.replace(/[\s\.]/g, ''); 
+            
+            return `${dateStr}_${timeStr}_${mdnStr}_${cleanAgent}_${sheetName}`;
+        }
+
+        function exportScorecards() {
+            if (!templateWorkbook || sampleGroups.length === 0) {
+                alert("請先上傳評分範本與報表檔案，並等待抽樣完成。");
+                return;
+            }
+            
+            const zip = new JSZip();
+            const agentSampleMap = {};
+            
+            sampleGroups.forEach(group => {
+                const mainCase = group.main;
+                const agent = mainCase._normalizedAgent;
+                if (!agentSampleMap[agent]) {
+                    agentSampleMap[agent] = [];
+                }
+                agentSampleMap[agent].push({
+                    main: mainCase,
+                    children: group.children || []
+                });
+            });
+            
+            const keepSheets = ['Call_Chat_FileName (2)', 'H', 'E', 'R', 'O'];
+            
+            for (let agentName in agentSampleMap) {
+                const cases = agentSampleMap[agentName];
+                if (cases.length === 0) continue;
+                
+                // Write template to buffer and parse back to ensure no reference leaks
+                const tplWbout = XLSX.write(templateWorkbook, { bookType: 'xlsx', type: 'array' });
+                const wb = XLSX.read(tplWbout, { type: 'array', cellDates: true });
+                
+                // Delete existing score sheets (like Alex Chen's) that are not in template keepSheets
+                wb.SheetNames = wb.SheetNames.filter(name => keepSheets.includes(name));
+                for (let sheetName in wb.Sheets) {
+                    if (!keepSheets.includes(sheetName)) {
+                        delete wb.Sheets[sheetName];
+                    }
+                }
+                
+                let tcsIdx = 1;
+                cases.forEach(caseGroup => {
+                    const caseRow = caseGroup.main;
+                    const carrier = caseRow.Carrier || caseRow._carrier || 'FET';
+                    let sheetName = "";
+                    
+                    if (caseRow.isRma) {
+                        sheetName = `${carrier}_RMA_IB`;
+                    } else {
+                        const cat = caseRow.Sampling_Category;
+                        if (cat.includes('TCS')) {
+                            sheetName = `${carrier}_SUR_IB_${String(tcsIdx).padStart(2, '0')}`;
+                            tcsIdx++;
+                        } else if (cat.includes('Tech_Call')) {
+                            sheetName = `${carrier}_Tech_IB`;
+                        } else if (cat.includes('General')) {
+                            sheetName = `${carrier}_Inquiry_IB`;
+                        } else {
+                            sheetName = `${carrier}_EWS_IB`;
+                        }
+                    }
+                    
+                    const sourceSheet = wb.Sheets['Call_Chat_FileName (2)'];
+                    if (!sourceSheet) return;
+                    
+                    const newSheet = copySheet(sourceSheet);
+                    wb.SheetNames.push(sheetName);
+                    wb.Sheets[sheetName] = newSheet;
+                    
+                    const mdnVal = caseRow.isRma ? caseRow['進線電話/外撥電話'] : caseRow._mdn;
+                    newSheet['C15'] = { t: 's', v: mdnVal || '-' };
+                    
+                    const recFilename = constructRecordingFilename(caseRow, sheetName, agentName);
+                    newSheet['C16'] = { t: 's', v: recFilename };
+                    
+                    newSheet['J17'] = { t: 's', v: caseRow.RATE };
+                    
+                    if (caseGroup.children && caseGroup.children.length > 0) {
+                        caseGroup.children.forEach((child, lIdx) => {
+                            const colLetter = XLSX.utils.encode_col(10 + lIdx); // Column K starts at index 10
+                            const cellRef = `${colLetter}17`;
+                            newSheet[cellRef] = { t: 's', v: child.RATE };
+                        });
+                    }
+                });
+                
+                const agentWbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+                
+                let dateSuffix = "202606";
+                const firstCase = cases[0].main;
+                if (firstCase._startTimeObj) {
+                    const d = firstCase._startTimeObj;
+                    const y = d.getFullYear();
+                    const m = String(d.getMonth() + 1).padStart(2, '0');
+                    dateSuffix = `${y}${m}`;
+                }
+                
+                const agentFileName = `NewHERO_${agentName}_Score_${dateSuffix}.xlsx`;
+                zip.file(agentFileName, agentWbout);
+            }
+            
+            zip.generateAsync({ type: 'blob' }).then(function(content) {
+                const url = URL.createObjectURL(content);
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = `NewHERO_QA_Scorecards_${new Date().toISOString().split('T')[0]}.zip`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }).catch(err => {
+                alert("打包壓縮檔失敗: " + err.message);
             });
         }
     </script>
