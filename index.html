@@ -78,8 +78,8 @@
 
         <!-- Control Panel -->
         <div class="p-6 border-b border-gray-200">
+            <input type="file" id="fileInput" accept=".csv, .xlsx, .xls" class="hidden" multiple>
             <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center transition-colors cursor-pointer hover:bg-gray-50">
-                <input type="file" id="fileInput" accept=".csv, .xlsx, .xls" class="hidden" multiple>
                 <div class="space-y-4 pointer-events-none">
                     <i class="fas fa-cloud-upload-alt text-4xl text-gray-400"></i>
                     <p class="text-gray-600 font-medium">點擊或拖曳檔案至此 (支援同時拖放多個檔案)</p>
@@ -281,7 +281,7 @@
         const TARGET_AGENTS = Object.values(AGENT_MAP);
 
         // --- DOM Elements ---
-        const dropZone = document.getElementById('dropZone');
+        const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('fileInput');
         const statusArea = document.getElementById('status-area');
         const errorArea = document.getElementById('error-area');
