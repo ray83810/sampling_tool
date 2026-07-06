@@ -56,8 +56,7 @@
             background-color: #fef08a !important; /* Tailwind yellow-200 */
         }
     </style>
-    <!-- ExcelJS for styling preservation -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+
 </head>
 <body class="bg-gray-50 min-h-screen p-4 md:p-8">
 
@@ -299,9 +298,10 @@
         // --- State ---
         let mainData = null;
         let rmaData = null;
-        let templateWorkbook = null;
+        let templateWorkbook = null; templateZipBuffer = null;
         
-        async function loadEmbeddedTemplate() {
+        let templateZipBuffer = null;
+        function loadEmbeddedTemplate() {
             try {
                 const binaryString = atob(TEMPLATE_BASE64);
                 const len = binaryString.length;
@@ -309,12 +309,14 @@
                 for (let i = 0; i < len; i++) {
                     bytes[i] = binaryString.charCodeAt(i);
                 }
-                templateWorkbook = new ExcelJS.Workbook();
-                await templateWorkbook.xlsx.load(bytes.buffer);
+                templateZipBuffer = bytes;
                 templateFileName = "NewHERO_Template.xlsx";
-                console.log("Embedded template loaded successfully using ExcelJS!");
+                console.log("Embedded template loaded successfully as raw zip bytes!");
+                // Update badge state
+                document.getElementById('status-tpl').innerText = "系統已內置";
+                document.getElementById('status-tpl').className = "px-2 py-1 rounded text-xs font-semibold bg-green-100 text-green-800";
             } catch (err) {
-                console.error("Failed to load embedded template using ExcelJS:", err);
+                console.error("Failed to load embedded template:", err);
             }
         }
         
@@ -521,7 +523,7 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
         function clearData() {
             mainData = null;
             rmaData = null;
-            templateWorkbook = null;
+            templateWorkbook = null; templateZipBuffer = null;
             mainFileName = "";
             rmaFileName = "";
             templateFileName = "";
@@ -606,7 +608,7 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                         try {
                             const data = new Uint8Array(e.target.result);
                             const workbook = XLSX.read(data, { type: 'array', cellDates: true });
-                            const parsed = parseRawWorkbook(workbook);
+                            const parsed = parseRawWorkbook(workbook, e.target.result);
                             if (parsed) handleParsedResult(parsed, file.name);
                         } catch (err) { showError("讀取 Excel 失敗: " + err.message); }
                         checkAllFilesParsed();
@@ -647,7 +649,7 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                 rmaFileName = fileName;
                 updateStatusBadge('rma', true, fileName);
             } else if (parsed.type === 'TEMPLATE') {
-                templateWorkbook = parsed.data;
+                templateZipBuffer = parsed.data; // fallback for manual upload
                 templateFileName = fileName;
                 updateStatusBadge('tpl', true, fileName);
                 if (sampleGroups.length > 0) {
@@ -657,11 +659,11 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
         }
 
         // --- Workbook Header Scanning & Parsing ---
-        function parseRawWorkbook(workbook) {
+        function parseRawWorkbook(workbook, rawData) {
             const sheetNames = workbook.SheetNames;
             // Identify template file by containing specific criteria sheets
             if (sheetNames.includes('Call_Chat_FileName (2)') && sheetNames.includes('H') && sheetNames.includes('E')) {
-                return { type: 'TEMPLATE', data: workbook };
+                return { type: 'TEMPLATE', data: rawData };
             }
             
             const sheetName = sheetNames[0];
@@ -895,7 +897,7 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                 filterBar.classList.remove('hidden');
                 
                 // Show export scorecard button if template workbook is loaded
-                if (templateWorkbook) {
+                if (templateZipBuffer) {
                     document.getElementById('exportScorecardsBtn').classList.remove('hidden');
                 }
             } else {
@@ -1314,15 +1316,36 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
             return `${dateStr}_${timeStr}_${mdnStr}_${cleanAgent}_${sheetName}`;
         }
 
+        function replaceCellInlineStr(sheetXml, cellRef, value, styleId) {
+            const cleanVal = String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&apos;');
+                
+            const newCellXml = `<c r="${cellRef}" s="${styleId}" t="inlineStr"><is><t>${cleanVal}</t></is></c>`;
+            
+            const selfClosingRegex = new RegExp('<c r="' + cellRef + '"([^>]*?)\\/>');
+            const openCloseRegex = new RegExp('<c r="' + cellRef + '"([^>]*?)>([\\s\\S]*?)<\/c>');
+            
+            if (selfClosingRegex.test(sheetXml)) {
+                return sheetXml.replace(selfClosingRegex, newCellXml);
+            } else if (openCloseRegex.test(sheetXml)) {
+                return sheetXml.replace(openCloseRegex, newCellXml);
+            }
+            return sheetXml;
+        }
+
         async function exportScorecards() {
             try {
-                if (!templateWorkbook || sampleGroups.length === 0) {
+                if (!templateZipBuffer || sampleGroups.length === 0) {
                     alert("請先上傳報表檔案，並等待抽樣完成。");
                     return;
                 }
                 
-                if (typeof JSZip === 'undefined' || typeof ExcelJS === 'undefined') {
-                    alert("必備的 JS 程式庫 (JSZip 或 ExcelJS) 尚未載入完成，請確認網路連線是否正常。");
+                if (typeof JSZip === 'undefined') {
+                    alert("必備的 JS 程式庫 (JSZip) 尚未載入完成，請確認網路連線是否正常。");
                     return;
                 }
                 
@@ -1343,30 +1366,103 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                 
                 const keepSheets = ['Call_Chat_FileName (2)', 'H', 'E', 'R', 'O'];
                 
-                // Write template workbook to buffer so we can clone it
-                const templateBuffer = await templateWorkbook.xlsx.writeBuffer();
-                
                 for (let agentName in agentSampleMap) {
                     const cases = agentSampleMap[agentName];
                     if (cases.length === 0) continue;
                     
-                    // Create a fresh clone of the template workbook
-                    const wb = new ExcelJS.Workbook();
-                    await wb.xlsx.load(templateBuffer);
+                    // Clone the template ZIP by loading the original bytes
+                    const agentZip = await JSZip.loadAsync(templateZipBuffer);
                     
-                    // Delete existing non-template worksheets
-                    const toRemove = wb.worksheets.filter(sheet => !keepSheets.includes(sheet.name));
-                    toRemove.forEach(sheet => {
-                        wb.removeWorksheet(sheet.id);
+                    // Parse xl/workbook.xml and xl/_rels/workbook.xml.rels
+                    const workbookXmlStr = await agentZip.file("xl/workbook.xml").async("string");
+                    const wbDoc = new DOMParser().parseFromString(workbookXmlStr, "application/xml");
+                    
+                    const wbRelsXmlStr = await agentZip.file("xl/_rels/workbook.xml.rels").async("string");
+                    const wbRelsDoc = new DOMParser().parseFromString(wbRelsXmlStr, "application/xml");
+                    
+                    // Map relationships
+                    const relsMap = {};
+                    const relEls = wbRelsDoc.getElementsByTagName("Relationship");
+                    for (let i = 0; i < relEls.length; i++) {
+                        const el = relEls[i];
+                        relsMap[el.getAttribute("Id")] = {
+                            target: el.getAttribute("Target"),
+                            el: el
+                        };
+                    }
+                    
+                    // Collect sheet info
+                    const sheets = [];
+                    const sheetEls = wbDoc.getElementsByTagName("sheet");
+                    for (let i = 0; i < sheetEls.length; i++) {
+                        const el = sheetEls[i];
+                        sheets.push({
+                            name: el.getAttribute("name"),
+                            sheetId: parseInt(el.getAttribute("sheetId")),
+                            rId: el.getAttribute("r:id") || el.getAttribute("id"),
+                            el: el
+                        });
+                    }
+                    
+                    // Remove non-template sheets from ZIP and XML configs
+                    const sheetsToRemove = sheets.filter(s => !keepSheets.includes(s.name));
+                    sheetsToRemove.forEach(s => {
+                        if (s.el && s.el.parentNode) {
+                            s.el.parentNode.removeChild(s.el);
+                        }
+                        
+                        const relInfo = relsMap[s.rId];
+                        if (relInfo) {
+                            if (relInfo.el && relInfo.el.parentNode) {
+                                relInfo.el.parentNode.removeChild(relInfo.el);
+                            }
+                            
+                            const sheetPath = "xl/" + relInfo.target;
+                            agentZip.remove(sheetPath);
+                            
+                            const filename = relInfo.target.split('/').pop();
+                            const relsPath = "xl/worksheets/_rels/" + filename + ".rels";
+                            agentZip.remove(relsPath);
+                        }
                     });
                     
-                    const sourceSheet = wb.getWorksheet('Call_Chat_FileName (2)');
-                    if (!sourceSheet) {
+                    // Find original template sheet info
+                    const templateSheetInfo = sheets.find(s => s.name === 'Call_Chat_FileName (2)');
+                    if (!templateSheetInfo) {
                         alert("找不到內置評分範本工作表：Call_Chat_FileName (2)");
                         return;
                     }
+                    const templateTargetRel = relsMap[templateSheetInfo.rId];
+                    if (!templateTargetRel) {
+                        alert("找不到內置評分範本工作表的關係鏈");
+                        return;
+                    }
+                    const templateSheetPath = "xl/" + templateTargetRel.target;
+                    const templateSheetXml = await agentZip.file(templateSheetPath).async("string");
+                    
+                    const templateSheetRelPath = "xl/worksheets/_rels/" + templateTargetRel.target.split('/').pop() + ".rels";
+                    let templateSheetRelXml = null;
+                    if (agentZip.file(templateSheetRelPath)) {
+                        templateSheetRelXml = await agentZip.file(templateSheetRelPath).async("string");
+                    }
+                    
+                    // Calculate max indices
+                    let maxSheetId = 0;
+                    sheets.forEach(s => {
+                        if (s.sheetId > maxSheetId) maxSheetId = s.sheetId;
+                    });
+                    
+                    let maxRIdNum = 0;
+                    for (let rId in relsMap) {
+                        const num = parseInt(rId.replace("rId", ""));
+                        if (!isNaN(num) && num > maxRIdNum) maxRIdNum = num;
+                    }
                     
                     let tcsIdx = 1;
+                    const sheetsContainer = wbDoc.getElementsByTagName("sheets")[0];
+                    const relsContainer = wbRelsDoc.documentElement;
+                    
+                    // Duplicate worksheet for each case
                     for (let idx = 0; idx < cases.length; idx++) {
                         const caseGroup = cases[idx];
                         const caseRow = caseGroup.main;
@@ -1389,46 +1485,73 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                             }
                         }
                         
-                        // Deduplicate sheet name in the cloned workbook
+                        // Deduplicate sheet name in the cloned workbook xml
                         let uniqueSheetName = sheetName;
                         let suffix = 1;
-                        while (wb.worksheets.some(s => s.name === uniqueSheetName)) {
+                        
+                        // Check duplicate names in current sheets list
+                        const currentSheetNames = Array.from(wbDoc.getElementsByTagName("sheet")).map(el => el.getAttribute("name"));
+                        while (currentSheetNames.includes(uniqueSheetName)) {
                             uniqueSheetName = `${sheetName}${suffix}`;
                             suffix++;
                         }
                         sheetName = uniqueSheetName;
                         
-                        // Add target worksheet and clone model deeply to preserve all styles, validations, merges, and conditional formattings
-                        const targetSheet = wb.addWorksheet(sheetName);
-                        const clonedModel = JSON.parse(JSON.stringify(sourceSheet.model));
-                        clonedModel.name = sheetName;
-                        clonedModel.id = targetSheet.id;
-                        targetSheet.model = clonedModel;
-                        targetSheet.state = 'visible'; // Ensure it is visible!
+                        maxSheetId++;
+                        maxRIdNum++;
+                        const newSheetId = maxSheetId;
+                        const newRId = `rId${maxRIdNum}`;
+                        const newSheetFilename = `sheet${newSheetId}.xml`;
                         
-                        // Fill in C15 (MDN)
+                        // Copy sheet XML and replace specific cells
+                        let targetSheetXml = templateSheetXml;
+                        
                         const mdnVal = caseRow.isRma ? caseRow['進線電話/外撥電話'] : caseRow._mdn;
-                        targetSheet.getCell('C15').value = mdnVal || '-';
+                        targetSheetXml = replaceCellInlineStr(targetSheetXml, 'C15', mdnVal || '-', '30');
                         
-                        // Fill in C16 (Filename)
                         const recFilename = constructRecordingFilename(caseRow, sheetName, agentName);
-                        targetSheet.getCell('C16').value = recFilename;
+                        targetSheetXml = replaceCellInlineStr(targetSheetXml, 'C16', recFilename, '30');
                         
-                        // Fill in J17 (Main RATE)
-                        targetSheet.getCell('J17').value = caseRow.RATE;
+                        targetSheetXml = replaceCellInlineStr(targetSheetXml, 'J17', caseRow.RATE || '', '42');
                         
-                        // Fill in K17, L17... for linked outbound calls
                         if (caseGroup.children && caseGroup.children.length > 0) {
                             caseGroup.children.forEach((child, lIdx) => {
-                                const colLetter = getColumnLetter(11 + lIdx); // Column K is index 11
+                                const colLetter = getColumnLetter(11 + lIdx);
                                 const cellRef = `${colLetter}17`;
-                                targetSheet.getCell(cellRef).value = child.RATE;
+                                targetSheetXml = replaceCellInlineStr(targetSheetXml, cellRef, child.RATE || '', '42');
                             });
                         }
+                        
+                        // Write new sheet file and rels
+                        agentZip.file(`xl/worksheets/${newSheetFilename}`, targetSheetXml);
+                        if (templateSheetRelXml) {
+                            agentZip.file(`xl/worksheets/_rels/${newSheetFilename}.rels`, templateSheetRelXml);
+                        }
+                        
+                        // Register sheet in workbook.xml
+                        const newSheetEl = wbDoc.createElementNS("http://schemas.openxmlformats.org/spreadsheetml/2006/main", "sheet");
+                        newSheetEl.setAttribute("name", sheetName);
+                        newSheetEl.setAttribute("sheetId", String(newSheetId));
+                        newSheetEl.setAttribute("r:id", newRId);
+                        sheetsContainer.appendChild(newSheetEl);
+                        
+                        // Register Relationship in workbook.xml.rels
+                        const newRelEl = wbRelsDoc.createElementNS("http://schemas.openxmlformats.org/package/2006/relationships", "Relationship");
+                        newRelEl.setAttribute("Id", newRId);
+                        newRelEl.setAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet");
+                        newRelEl.setAttribute("Target", `worksheets/${newSheetFilename}`);
+                        relsContainer.appendChild(newRelEl);
                     }
                     
-                    // Write agent workbook to buffer
-                    const agentBuffer = await wb.xlsx.writeBuffer();
+                    // Serialize workbook XML files
+                    const newWbXmlStr = new XMLSerializer().serializeToString(wbDoc);
+                    const newWbRelsXmlStr = new XMLSerializer().serializeToString(wbRelsDoc);
+                    
+                    agentZip.file("xl/workbook.xml", newWbXmlStr);
+                    agentZip.file("xl/_rels/workbook.xml.rels", newWbRelsXmlStr);
+                    
+                    // Generate arraybuffer
+                    const agentBuffer = await agentZip.generateAsync({ type: 'arraybuffer' });
                     
                     let dateSuffix = "202606";
                     const firstCase = cases[0].main;
