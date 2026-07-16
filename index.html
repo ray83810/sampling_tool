@@ -1386,6 +1386,17 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
             return sheetXml;
         }
 
+                function getZipPath(target) {
+            let path = target || '';
+            if (path.startsWith('/')) {
+                path = path.substring(1);
+            }
+            if (!path.startsWith('xl/')) {
+                path = 'xl/' + path;
+            }
+            return path;
+        }
+
         async function exportScorecards() {
             try {
                 if (!templateZipBuffer || sampleGroups.length === 0) {
@@ -1466,7 +1477,7 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                                 relInfo.el.parentNode.removeChild(relInfo.el);
                             }
                             
-                            const sheetPath = "xl/" + relInfo.target;
+                            const sheetPath = getZipPath(relInfo.target);
                             agentZip.remove(sheetPath);
                             
                             const filename = relInfo.target.split('/').pop();
@@ -1486,7 +1497,7 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                         alert("找不到內置評分範本工作表的關係鏈");
                         return;
                     }
-                    const templateSheetPath = "xl/" + templateTargetRel.target;
+                    const templateSheetPath = getZipPath(templateTargetRel.target);
                     const templateSheetXml = await agentZip.file(templateSheetPath).async("string");
                     
                     const templateSheetRelPath = "xl/worksheets/_rels/" + templateTargetRel.target.split('/').pop() + ".rels";
