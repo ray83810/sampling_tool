@@ -1346,17 +1346,43 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;')
-                .replace(/'/g, '&apos;');
+                .replace(/'/g, '&apos;')
+                .replace(/\n/g, '&#10;');
                 
-            const newCellXml = `<c r="${cellRef}" s="${styleId}" t="inlineStr"><is><t>${cleanVal}</t></is></c>`;
+            const newCellXml = '<c r="' + cellRef + '" s="' + styleId + '" t="inlineStr"><is><t>' + cleanVal + '</t></is></c>';
             
-            const selfClosingRegex = new RegExp('<c r="' + cellRef + '"([^>]*?)\\/>');
-            const openCloseRegex = new RegExp('<c r="' + cellRef + '"([^>]*?)>([\\s\\S]*?)<\/c>');
+            const selfClosingRegex = new RegExp('<c r="' + cellRef + '"([^>]*?)/>');
+            const openCloseRegex = new RegExp('<c r="' + cellRef + '"([^>]*?)>[\\s\\S]*?</c>');
             
             if (selfClosingRegex.test(sheetXml)) {
                 return sheetXml.replace(selfClosingRegex, newCellXml);
             } else if (openCloseRegex.test(sheetXml)) {
                 return sheetXml.replace(openCloseRegex, newCellXml);
+            }
+            console.warn('Cell ' + cellRef + ' not found in sheet XML');
+            return sheetXml;
+        }
+        
+        function addMergeCell(sheetXml, mergeRef) {
+            // Add a <mergeCell ref="..."/> to the <mergeCells> block
+            if (sheetXml.includes('<mergeCells')) {
+                // Update the count attribute and append the new mergeCell
+                sheetXml = sheetXml.replace(
+                    /<mergeCells\s+count="(\d+)"/,
+                    function(match, count) {
+                        return '<mergeCells count="' + (parseInt(count) + 1) + '"';
+                    }
+                );
+                sheetXml = sheetXml.replace(
+                    '</mergeCells>',
+                    '<mergeCell ref="' + mergeRef + '"/></mergeCells>'
+                );
+            } else {
+                // No mergeCells block exists, insert one before </worksheet>
+                sheetXml = sheetXml.replace(
+                    '</worksheet>',
+                    '<mergeCells count="1"><mergeCell ref="' + mergeRef + '"/></mergeCells></worksheet>'
+                );
             }
             return sheetXml;
         }
@@ -1537,12 +1563,16 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                         targetSheetXml = replaceCellInlineStr(targetSheetXml, 'C16', recFilename, '30');
                         
                         targetSheetXml = replaceCellInlineStr(targetSheetXml, 'J17', caseRow.RATE || '', '42');
+                        // Add J17:J60 merge for RATE content area
+                        targetSheetXml = addMergeCell(targetSheetXml, 'J17:J60');
                         
                         if (caseGroup.children && caseGroup.children.length > 0) {
                             caseGroup.children.forEach((child, lIdx) => {
                                 const colLetter = getColumnLetter(11 + lIdx);
                                 const cellRef = `${colLetter}17`;
                                 targetSheetXml = replaceCellInlineStr(targetSheetXml, cellRef, child.RATE || '', '42');
+                                // Add merge for outbound RATE column (e.g. K17:K60)
+                                targetSheetXml = addMergeCell(targetSheetXml, `${colLetter}17:${colLetter}60`);
                             });
                         }
                         
