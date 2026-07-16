@@ -1572,16 +1572,14 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                         const recFilename = constructRecordingFilename(caseRow, sheetName, agentName);
                         targetSheetXml = replaceCellInlineStr(targetSheetXml, 'C16', recFilename, '30');
                         
-                        targetSheetXml = replaceCellInlineStr(targetSheetXml, 'J17', caseRow.RATE || '', '42');
-                        // Add J17:J60 merge for RATE content area
-                        targetSheetXml = addMergeCell(targetSheetXml, 'J17:J60');
+                        targetSheetXml = replaceCellInlineStr(targetSheetXml, 'I17', caseRow.RATE || '', '273');
                         
                         if (caseGroup.children && caseGroup.children.length > 0) {
                             caseGroup.children.forEach((child, lIdx) => {
-                                const colLetter = getColumnLetter(11 + lIdx);
+                                const colLetter = getColumnLetter(10 + lIdx);
                                 const cellRef = `${colLetter}17`;
                                 targetSheetXml = replaceCellInlineStr(targetSheetXml, cellRef, child.RATE || '', '42');
-                                // Add merge for outbound RATE column (e.g. K17:K60)
+                                // Add merge for outbound RATE column (e.g. J17:J60)
                                 targetSheetXml = addMergeCell(targetSheetXml, `${colLetter}17:${colLetter}60`);
                             });
                         }
@@ -1605,6 +1603,24 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                         newRelEl.setAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet");
                         newRelEl.setAttribute("Target", `worksheets/${newSheetFilename}`);
                         relsContainer.appendChild(newRelEl);
+                    }
+                    
+                    // Remove template sheet 'Call_Chat_FileName (2)' from exported workbook
+                    const tplSheetEl = Array.from(wbDoc.getElementsByTagName("sheet")).find(el => el.getAttribute("name") === "Call_Chat_FileName (2)");
+                    if (tplSheetEl) {
+                        const tplRId = tplSheetEl.getAttribute("r:id");
+                        tplSheetEl.parentNode.removeChild(tplSheetEl);
+                        // Also remove the template sheet file from ZIP
+                        const tplRel = relsMap[tplRId];
+                        if (tplRel) {
+                            if (tplRel.el && tplRel.el.parentNode) {
+                                tplRel.el.parentNode.removeChild(tplRel.el);
+                            }
+                            const tplPath = getZipPath(tplRel.target);
+                            agentZip.remove(tplPath);
+                            const tplFilename = tplRel.target.split('/').pop();
+                            agentZip.remove("xl/worksheets/_rels/" + tplFilename + ".rels");
+                        }
                     }
                     
                     // Serialize workbook XML files
