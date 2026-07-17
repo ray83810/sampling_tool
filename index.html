@@ -1688,7 +1688,6 @@
 
 
 
-        loadEmbeddedTemplate();
 
 
 
@@ -1739,6 +1738,9 @@
 
 
         };
+
+        // Load embedded template on startup after state vars initialized
+        loadEmbeddedTemplate();
 
 
 
@@ -7436,6 +7438,7 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
                 console.error(err);
 
             }
+        }
 
     </script>
 
