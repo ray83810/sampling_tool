@@ -350,6 +350,10 @@
 
         // --- Event Listeners ---
         
+        // Prevent default browser drag/drop behavior across the window to stop tab navigation
+        window.addEventListener('dragover', (e) => { e.preventDefault(); });
+        window.addEventListener('drop', (e) => { e.preventDefault(); });
+
         dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-active'); });
         dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('drag-active'); });
         dropZone.addEventListener('drop', (e) => {
@@ -475,15 +479,22 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
             return String(name).trim().toLowerCase().replace(/[\s\.]/g, '');
         }
 
-        function getMappedAgent(rawAgent) {
-            const norm = normalizeAgentName(rawAgent);
-            if (!norm) return null;
-            for (let key in AGENT_MAP) {
-                if (normalizeAgentName(key) === norm || normalizeAgentName(AGENT_MAP[key]) === norm) {
-                    return AGENT_MAP[key];
-                }
-            }
-            return null;
+        function getMappedAgent(rawAgent) {
+            if (!rawAgent) return null;
+            const norm = normalizeAgentName(rawAgent);
+            if (!norm) return null;
+            for (let key in AGENT_MAP) {
+                if (normalizeAgentName(key) === norm || normalizeAgentName(AGENT_MAP[key]) === norm) {
+                    return AGENT_MAP[key];
+                }
+            }
+            // Dynamic fallback: capitalize words separated by dots or spaces (e.g. ray.feng -> Ray Feng)
+            const cleanStr = String(rawAgent).trim();
+            const parts = cleanStr.split(/[\s\.]+/);
+            if (parts.length > 0) {
+                return parts.map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(' ');
+            }
+            return cleanStr;
         }
 
         // --- Single Select Function ---
