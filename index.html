@@ -78,7 +78,7 @@
 
         <!-- Control Panel -->
         <div class="p-6 border-b border-gray-200">
-            <input type="file" id="fileInput" accept=".csv, .xlsx, .xls" class="hidden" multiple>
+            <input type="file" id="fileInput" accept=".csv, .xlsx, .xls" class="hidden" multiple onclick="this.value=null">
             <div id="drop-zone" onclick="document.getElementById('fileInput').click()" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center transition-colors cursor-pointer hover:bg-gray-50">
                 <div class="space-y-4 pointer-events-none">
                     <i class="fas fa-cloud-upload-alt text-4xl text-gray-400"></i>
@@ -685,7 +685,8 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
         function parseRawWorkbook(workbook, rawData) {
             const sheetNames = workbook.SheetNames;
             // Identify template file by containing specific criteria sheets
-            if (sheetNames.includes('Call_Chat_FileName (2)') && sheetNames.includes('H') && sheetNames.includes('E')) {
+            const isTemplate = sheetNames.some(s => ['Call_Chat_FileName (2)', 'DEX_Tech_Call', 'SYNNEX_SUR_1', 'CHT_HOME_EWS_Call', 'FET_Inquiry_Call', 'H', 'E', 'R', 'O'].includes(s));
+            if (isTemplate) {
                 return { type: 'TEMPLATE', data: rawData };
             }
             
