@@ -1083,9 +1083,32 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
             }
         }
 
+        
+        function showError(msg) {
+            const errorArea = document.getElementById('errorArea') || document.getElementById('error-area');
+            if (errorArea) {
+                const msgEl = document.getElementById('error-msg') || errorArea;
+                msgEl.textContent = msg;
+                errorArea.classList.remove('hidden');
+            } else {
+                alert("Error: " + msg);
+            }
+        }
+        function showWarning(msg) {
+            const warningArea = document.getElementById('warningArea') || document.getElementById('warning-area');
+            if (warningArea) {
+                const msgEl = document.getElementById('warning-msg') || warningArea;
+                msgEl.textContent = msg;
+                warningArea.classList.remove('hidden');
+            } else {
+                alert("Warning: " + msg);
+            }
+        }
+
         // --- File Handlers ---
 
         function handleFiles(files) {
+    try {
             console.log('[UPLOAD] handleFiles called with', files.length, 'file(s):', Array.from(files).map(f=>f.name).join(', '));
 
             errorArea.classList.add('hidden');
@@ -1225,6 +1248,11 @@ ${rmaId}${policyId}${reasonStr}${wrapUpStr}`;
             }
 
         }
+    } catch(globalErr) {
+        alert("Fatal Error in handleFiles: " + globalErr.message + "\n" + globalErr.stack);
+        console.error("Fatal Error:", globalErr);
+    }
+
 
         function handleParsedResult(parsed, fileName) {
             console.log('[UPLOAD] handleParsedResult - type:', parsed.type, ', file:', fileName);
